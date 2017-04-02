@@ -1,6 +1,8 @@
 package edu.illinois.library.cantaloupe.resolver;
 
-import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.auth.*;
+import com.amazonaws.auth.profile.ProfileCredentialsProvider;
+import com.amazonaws.internal.StaticCredentialsProvider;
 import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
@@ -16,6 +18,8 @@ import edu.illinois.library.cantaloupe.image.MediaType;
 import edu.illinois.library.cantaloupe.script.DelegateScriptDisabledException;
 import edu.illinois.library.cantaloupe.script.ScriptEngine;
 import edu.illinois.library.cantaloupe.script.ScriptEngineFactory;
+
+import org.jruby.RubyArray;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -80,6 +84,7 @@ class AmazonS3Resolver extends AbstractResolver implements StreamResolver {
             "AmazonS3Resolver::get_object_key";
 
     private static AmazonS3 client;
+    private String bucketName;
 
     /** Lock object for synchronization */
     private static final Object lock = new Object();
@@ -102,7 +107,15 @@ class AmazonS3Resolver extends AbstractResolver implements StreamResolver {
                 }
 
                 AWSCredentials credentials = new ConfigFileCredentials();
-                client = new AmazonS3Client(credentials);
+                AWSCredentialsProvider chain = new AWSCredentialsProviderChain(
+                		new StaticCredentialsProvider(credentials),
+                		new EnvironmentVariableCredentialsProvider(),
+                		new SystemPropertiesCredentialsProvider(),
+                		new ProfileCredentialsProvider(),
+                		new InstanceProfileCredentialsProvider(false)
+                );
+                
+                client = new AmazonS3Client(chain);
 
                 // a custom endpoint will be used in testing
                 final String endpoint = config.getString(ENDPOINT_CONFIG_KEY);
@@ -133,9 +146,9 @@ class AmazonS3Resolver extends AbstractResolver implements StreamResolver {
         AmazonS3 s3 = getClientInstance();
 
         Configuration config = ConfigurationFactory.getInstance();
-        final String bucketName = config.getString(BUCKET_NAME_CONFIG_KEY);
-        logger.info("Using bucket: {}", bucketName);
+        bucketName = config.getString(BUCKET_NAME_CONFIG_KEY);
         final String objectKey = getObjectKey();
+        logger.info("Using bucket: {}", bucketName);
         try {
             logger.info("Requesting {}", objectKey);
             return s3.getObject(new GetObjectRequest(bucketName, objectKey));
@@ -182,7 +195,12 @@ class AmazonS3Resolver extends AbstractResolver implements StreamResolver {
             throw new FileNotFoundException(GET_KEY_DELEGATE_METHOD +
                     " returned nil for " + identifier);
         }
-        return (String) result;
+        if (result.getClass() == RubyArray.class) {
+        	bucketName = ((RubyArray) result).get(0).toString();
+        	return ((RubyArray) result).get(1).toString();
+        } else {
+        	return (String) result;
+        }
     }
 
     @Override
@@ -191,7 +209,7 @@ class AmazonS3Resolver extends AbstractResolver implements StreamResolver {
             S3Object object = getObject();
             String contentType = object.getObjectMetadata().getContentType();
             // See if we can determine the format from the Content-Type header.
-            if (contentType != null) {
+            if (contentType != null && !contentType.isEmpty()) {
                 sourceFormat = new MediaType(contentType).toFormat();
             }
             if (sourceFormat == null || sourceFormat.equals(Format.UNKNOWN)) {
