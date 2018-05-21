@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory;
 import java.io.InputStream;
 import java.util.Iterator;
 
-public abstract class LoggerUtil {
+public final class LoggerUtil {
 
     /**
      * Reloads the Logback configuration from logback.xml.
@@ -25,7 +25,7 @@ public abstract class LoggerUtil {
             loggerContext.reset();
             // Copy logging-related configuration key/values into logger
             // context properties.
-            final Iterator it = appConfig.getKeys();
+            final Iterator<String> it = appConfig.getKeys();
             while (it.hasNext()) {
                 final String key = (String) it.next();
                 if (key.startsWith("log.")) {
@@ -42,5 +42,7 @@ public abstract class LoggerUtil {
             StatusPrinter.printIfErrorsOccured(loggerContext);
         }
     }
+
+    private LoggerUtil() {}
 
 }

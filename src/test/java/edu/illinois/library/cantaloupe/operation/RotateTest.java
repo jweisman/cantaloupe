@@ -1,5 +1,7 @@
 package edu.illinois.library.cantaloupe.operation;
 
+import edu.illinois.library.cantaloupe.image.Format;
+import edu.illinois.library.cantaloupe.image.Identifier;
 import edu.illinois.library.cantaloupe.test.BaseTest;
 import org.junit.Before;
 import org.junit.Test;
@@ -11,109 +13,123 @@ import static org.junit.Assert.*;
 
 public class RotateTest extends BaseTest {
 
-    private Rotate rotate;
+    private Rotate instance;
 
     @Before
     public void setUp() throws Exception {
         super.setUp();
 
-        this.rotate = new Rotate();
-        assertEquals(0f, this.rotate.getDegrees(), 0.0000001f);
+        this.instance = new Rotate();
+        assertEquals(0f, this.instance.getDegrees(), 0.0000001f);
     }
 
     @Test
-    public void testAddDegrees() {
-        rotate.addDegrees(45f);
-        assertEquals(45f, rotate.getDegrees(), 0.00000001f);
-        rotate.addDegrees(340.5f);
-        assertEquals(25.5f, rotate.getDegrees(), 0.00000001f);
-        rotate.addDegrees(720f);
-        assertEquals(25.5f, rotate.getDegrees(), 0.00000001f);
+    public void addDegrees() {
+        instance.addDegrees(45f);
+        assertEquals(45f, instance.getDegrees(), 0.00000001f);
+        instance.addDegrees(340.5f);
+        assertEquals(25.5f, instance.getDegrees(), 0.00000001f);
+        instance.addDegrees(720f);
+        assertEquals(25.5f, instance.getDegrees(), 0.00000001f);
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void addDegreesWhenFrozenThrowsException() {
+        instance.freeze();
+        instance.addDegrees(15);
     }
 
     @Test
-    public void testEquals() {
-        assertTrue(rotate.equals(new Rotate()));
-        assertFalse(rotate.equals(new Rotate(1)));
-        assertFalse(rotate.equals(new Object()));
+    public void equals() {
+        assertTrue(instance.equals(new Rotate()));
+        assertFalse(instance.equals(new Rotate(1)));
+        assertFalse(instance.equals(new Object()));
     }
 
     @Test
-    public void testGetEffectiveSize() {
+    public void getResultingSize() {
         Dimension fullSize = new Dimension(300, 200);
-        assertEquals(fullSize, rotate.getResultingSize(fullSize));
+        assertEquals(fullSize, instance.getResultingSize(fullSize));
 
-        final int degrees = 45;
-        rotate.setDegrees(degrees);
+        final int degrees = 30;
+        instance.setDegrees(degrees);
 
-        final int expectedWidth = (int) Math.round(
-                Math.abs(fullSize.width * Math.cos(degrees)) +
-                        Math.abs(fullSize.height * Math.sin(degrees)));
-        final int expectedHeight = (int) Math.round(
-                Math.abs(fullSize.height * Math.cos(degrees)) +
-                        Math.abs(fullSize.width * Math.sin(degrees)));
-        Dimension expectedSize = new Dimension(expectedWidth, expectedHeight);
-        assertEquals(expectedSize, rotate.getResultingSize(fullSize));
+        Dimension expectedSize = new Dimension(360, 323);
+        assertEquals(expectedSize, instance.getResultingSize(fullSize));
     }
 
     @Test
-    public void testHasEffect() {
-        assertFalse(rotate.hasEffect());
-        rotate.setDegrees(30);
-        assertTrue(rotate.hasEffect());
-        rotate.setDegrees(0.001f);
-        assertTrue(rotate.hasEffect());
-        rotate.setDegrees(0.00001f);
-        assertFalse(rotate.hasEffect());
+    public void hasEffect() {
+        assertFalse(instance.hasEffect());
+        instance.setDegrees(30);
+        assertTrue(instance.hasEffect());
+        instance.setDegrees(0.001f);
+        assertTrue(instance.hasEffect());
+        instance.setDegrees(0.00001f);
+        assertFalse(instance.hasEffect());
     }
 
     @Test
-    public void testHasEffectWithArguments() {
+    public void hasEffectWithArguments() {
         Dimension fullSize = new Dimension(600, 400);
         OperationList opList = new OperationList();
         opList.add(new Crop(0, 0, 300, 200));
-        assertFalse(rotate.hasEffect(fullSize, opList));
-        rotate.setDegrees(30);
-        assertTrue(rotate.hasEffect(fullSize, opList));
-        rotate.setDegrees(0.001f);
-        assertTrue(rotate.hasEffect(fullSize, opList));
-        rotate.setDegrees(0.00001f);
-        assertFalse(rotate.hasEffect(fullSize, opList));
+
+        assertFalse(instance.hasEffect(fullSize, opList));
+        instance.setDegrees(30);
+        assertTrue(instance.hasEffect(fullSize, opList));
+        instance.setDegrees(0.001f);
+        assertTrue(instance.hasEffect(fullSize, opList));
+        instance.setDegrees(0.00001f);
+        assertFalse(instance.hasEffect(fullSize, opList));
     }
 
     @Test
-    public void testSetDegrees() {
+    public void setDegrees() {
         float degrees = 50f;
-        this.rotate.setDegrees(degrees);
-        assertEquals(degrees, this.rotate.getDegrees(), 0.000001f);
+        instance.setDegrees(degrees);
+        assertEquals(degrees, instance.getDegrees(), 0.000001f);
     }
 
     @Test
-    public void testSetLargeDegrees() {
+    public void setDegreesWithLargeDegrees() {
         float degrees = 530f;
         try {
-            this.rotate.setDegrees(degrees);
+            instance.setDegrees(degrees);
         } catch (IllegalArgumentException e) {
             assertEquals("Degrees must be between 0 and 360", e.getMessage());
         }
     }
 
     @Test
-    public void testSetNegativeDegrees() {
+    public void setDegreesWithNegativeDegrees() {
         float degrees = -50f;
         try {
-            this.rotate.setDegrees(degrees);
+            instance.setDegrees(degrees);
         } catch (IllegalArgumentException e) {
             assertEquals("Degrees must be between 0 and 360", e.getMessage());
         }
     }
 
+    @Test(expected = IllegalStateException.class)
+    public void setDegreesWhenFrozenThrowsException() {
+        instance.freeze();
+        instance.setDegrees(15);
+    }
+
     @Test
-    public void testToMap() {
-        this.rotate.setDegrees(15);
-        Map<String,Object> map = this.rotate.toMap(new Dimension(0, 0));
-        assertEquals(rotate.getClass().getSimpleName(), map.get("class"));
+    public void toMap() {
+        instance.setDegrees(15);
+        Map<String,Object> map = instance.toMap(new Dimension(0, 0));
+        assertEquals(instance.getClass().getSimpleName(), map.get("class"));
         assertEquals(15f, map.get("degrees"));
+    }
+
+    @Test(expected = UnsupportedOperationException.class)
+    public void toMapReturnsUnmodifiableMap() {
+        Dimension fullSize = new Dimension(100, 100);
+        Map<String,Object> map = instance.toMap(fullSize);
+        map.put("test", "test");
     }
 
     @Test

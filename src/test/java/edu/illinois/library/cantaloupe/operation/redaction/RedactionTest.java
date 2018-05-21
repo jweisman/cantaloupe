@@ -1,5 +1,7 @@
 package edu.illinois.library.cantaloupe.operation.redaction;
 
+import edu.illinois.library.cantaloupe.image.Format;
+import edu.illinois.library.cantaloupe.image.Identifier;
 import edu.illinois.library.cantaloupe.operation.Crop;
 import edu.illinois.library.cantaloupe.operation.OperationList;
 import edu.illinois.library.cantaloupe.test.BaseTest;
@@ -22,7 +24,7 @@ public class RedactionTest extends BaseTest {
     }
 
     @Test
-    public void testGetResultingRegion() {
+    public void getResultingRegion() {
         Dimension sourceSize = new Dimension(500, 500);
 
         // redaction within source image bounds
@@ -42,13 +44,13 @@ public class RedactionTest extends BaseTest {
     }
 
     @Test
-    public void testGetResultingSize() {
+    public void getResultingSize() {
         Dimension fullSize = new Dimension(500, 500);
         assertEquals(fullSize, instance.getResultingSize(fullSize));
     }
 
     @Test
-    public void testHasEffect() {
+    public void hasEffect() {
         assertTrue(instance.hasEffect());
 
         // zero width
@@ -65,7 +67,7 @@ public class RedactionTest extends BaseTest {
     }
 
     @Test
-    public void testIsNoOpWithArguments() {
+    public void isNoOpWithArguments() {
         final Dimension fullSize = new Dimension(600, 400);
         final OperationList opList = new OperationList();
         opList.add(new Crop(0, 0, 400, 300));
@@ -78,8 +80,14 @@ public class RedactionTest extends BaseTest {
         assertFalse(instance.hasEffect(fullSize, opList));
     }
 
+    @Test(expected = IllegalStateException.class)
+    public void setRegionWhenInstanceIsFrozen() {
+        instance.freeze();
+        instance.setRegion(new Rectangle(0, 0, 10, 10));
+    }
+
     @Test
-    public void testToMap() {
+    public void toMap() {
         Dimension fullSize = new Dimension(500, 500);
 
         Map<String,Object> map = instance.toMap(fullSize);
@@ -88,6 +96,13 @@ public class RedactionTest extends BaseTest {
         assertEquals(60, map.get("y"));
         assertEquals(200, map.get("width"));
         assertEquals(100, map.get("height"));
+    }
+
+    @Test(expected = UnsupportedOperationException.class)
+    public void toMapReturnsUnmodifiableMap() {
+        Dimension fullSize = new Dimension(100, 100);
+        Map<String,Object> map = instance.toMap(fullSize);
+        map.put("test", "test");
     }
 
     @Test

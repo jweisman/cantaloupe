@@ -12,9 +12,13 @@ http://maven.apache.org/plugins/maven-assembly-plugin/assembly.html
     </formats>
     <fileSets>
         <fileSet>
+            <directory>dist</directory>
+            <outputDirectory>.</outputDirectory>
+        </fileSet>
+        <fileSet>
             <directory>target</directory>
             <includes>
-                <include>Cantaloupe-${project.version}.war</include>
+                <include>cantaloupe-${project.version}.war</include>
             </includes>
             <outputDirectory>.</outputDirectory>
         </fileSet>
@@ -22,23 +26,25 @@ http://maven.apache.org/plugins/maven-assembly-plugin/assembly.html
     <files>
         <file>
             <source>cantaloupe.properties.sample</source>
+            <destName>cantaloupe.properties.sample</destName>
             <fileMode>0644</fileMode>
-        </file>
-        <file>
-            <source>CREDITS</source>
-            <fileMode>0644</fileMode>
+            <lineEnding>crlf</lineEnding>
         </file>
         <file>
             <source>delegates.rb.sample</source>
+            <destName>delegates.rb.sample</destName>
             <fileMode>0644</fileMode>
+            <lineEnding>crlf</lineEnding>
         </file>
         <file>
-            <source>LICENSE</source>
+            <source>LICENSE.txt</source>
             <fileMode>0644</fileMode>
+            <lineEnding>crlf</lineEnding>
         </file>
         <file>
             <source>README.md</source>
             <fileMode>0644</fileMode>
+            <lineEnding>crlf</lineEnding>
         </file>
     </files>
 </assembly>

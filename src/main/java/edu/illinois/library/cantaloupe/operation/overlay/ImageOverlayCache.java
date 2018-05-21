@@ -5,11 +5,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URL;
+import java.net.URI;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -18,48 +16,28 @@ import java.util.concurrent.ConcurrentSkipListSet;
 /**
  * Thread-safe, in-memory image overlay cache.
  */
-class ImageOverlayCache {
+final class ImageOverlayCache {
 
-    private static final Logger logger = LoggerFactory.
+    private static final Logger LOGGER = LoggerFactory.
             getLogger(ImageOverlayCache.class);
 
-    private final Set<String> downloadingOverlays =
+    private final Set<URI> downloadingOverlays =
             new ConcurrentSkipListSet<>();
-    private final Map<String,byte[]> overlays = new ConcurrentHashMap<>();
-
-    private static final Object lock = new Object();
+    private final Map<URI, byte[]> overlays = new ConcurrentHashMap<>();
 
     /**
-     * @param file Overlay image file.
+     * @param uri Overlay image URI.
      * @return Overlay image.
      * @throws IOException If the image cannot be accessed.
      */
-    byte[] putAndGet(File file) throws IOException {
-        return putAndGet(file.getAbsolutePath());
-    }
-
-    /**
-     * @param url Overlay image URL.
-     * @return Overlay image.
-     * @throws IOException If the image cannot be accessed.
-     */
-    byte[] putAndGet(URL url) throws IOException {
-        return putAndGet(url.toString());
-    }
-
-    /**
-     * @param pathnameOrURL Pathname or URL of the overlay image.
-     * @return Overlay image.
-     * @throws IOException If the image cannot be accessed.
-     */
-    byte[] putAndGet(String pathnameOrURL) throws IOException {
+    byte[] putAndGet(URI uri) throws IOException {
         // If the overlay is currently being downloaded in another thread,
         // wait for it to download.
-        synchronized (lock) {
-            while (downloadingOverlays.contains(pathnameOrURL)) {
+        synchronized (this) {
+            while (downloadingOverlays.contains(uri)) {
                 try {
-                    logger.debug("putAndGet(): waiting on {}", pathnameOrURL);
-                    lock.wait();
+                    LOGGER.debug("putAndGet(): waiting on {}", uri);
+                    wait();
                 } catch (InterruptedException e) {
                     break;
                 }
@@ -67,37 +45,27 @@ class ImageOverlayCache {
         }
 
         // Try to pluck it out of the cache.
-        byte[] cachedValue = overlays.get(pathnameOrURL);
+        byte[] cachedValue = overlays.get(uri);
         if (cachedValue != null) {
-            logger.debug("putAndGet(): hit for {}", pathnameOrURL);
+            LOGGER.debug("putAndGet(): hit for {}", uri);
             return cachedValue;
         }
 
-        logger.debug("putAndGet(): miss for {}", pathnameOrURL);
+        LOGGER.debug("putAndGet(): miss for {}", uri);
 
         // It's not being downloaded and isn't cached, so download and cache it.
-        InputStream is = null;
-        ByteArrayOutputStream os = new ByteArrayOutputStream();
-        try {
-            downloadingOverlays.add(pathnameOrURL);
-            if (pathnameOrURL.startsWith("http://") ||
-                    pathnameOrURL.startsWith("https://")) {
-                final URL url = new URL(pathnameOrURL);
-                is = url.openStream();
-            } else {
-                is = new FileInputStream(pathnameOrURL);
-            }
+        downloadingOverlays.add(uri);
+        try (InputStream is = uri.toURL().openStream();
+             ByteArrayOutputStream os = new ByteArrayOutputStream()) {
             IOUtils.copy(is, os);
-            overlays.put(pathnameOrURL, os.toByteArray());
+            overlays.put(uri, os.toByteArray());
         } finally {
-            IOUtils.closeQuietly(is);
-            IOUtils.closeQuietly(os);
-            downloadingOverlays.remove(pathnameOrURL);
-            synchronized (lock) {
-                lock.notifyAll();
+            downloadingOverlays.remove(uri);
+            synchronized (this) {
+                notifyAll();
             }
         }
-        return overlays.get(pathnameOrURL);
+        return overlays.get(uri);
     }
 
 }

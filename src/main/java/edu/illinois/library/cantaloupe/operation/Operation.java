@@ -10,6 +10,13 @@ import java.util.Map;
 public interface Operation {
 
     /**
+     * Freezes the instance, making it immutable. When frozen, mutation methods
+     * should throw an {@link IllegalStateException} and getters should return
+     * immutable values, if possible. (But they should do that anyway.)
+     */
+    void freeze();
+
+    /**
      * @param fullSize Full size of the source image on which the operation
      *                 is being applied.
      * @return Resulting dimensions when the operation is applied to an image
@@ -42,10 +49,10 @@ public interface Operation {
     /**
      * @param fullSize Full size of the source image on which the operation
      *                 is being applied.
-     * @return Map serialization of the operation that expresses the essence
-     *         of the operation relative to the given full size. The map
-     *         should include a string <code>class</code> key pointing to
-     *         the simple class name of the operation.
+     * @return Unmodifiable Map serialization of the operation that expresses
+     *         the essence of the operation relative to the given full size.
+     *         The map should include a string <code>class</code> key pointing
+     *         to the simple class name of the operation.
      */
     Map<String,Object> toMap(Dimension fullSize);
 
@@ -59,8 +66,8 @@ public interface Operation {
      *
      * @param fullSize Full size of the source image on which the operation
      *                 is being applied.
-     * @throws ValidationException If the instance is invalid.
+     * @throws IllegalArgumentException if the instance is invalid.
      */
-    default void validate(Dimension fullSize) throws ValidationException {};
+    default void validate(Dimension fullSize) throws IllegalArgumentException {};
 
 }

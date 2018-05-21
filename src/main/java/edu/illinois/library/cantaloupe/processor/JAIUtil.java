@@ -26,31 +26,15 @@ import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.image.renderable.ParameterBlock;
 
-abstract class JAIUtil {
+/**
+ * @see <a href="http://docs.oracle.com/cd/E19957-01/806-5413-10/806-5413-10.pdf">
+ *     Programming in Java Advanced Imaging</a>
+ * @deprecated Since version 4.0.
+ */
+@Deprecated
+final class JAIUtil {
 
-    private static Logger logger = LoggerFactory.getLogger(JAIUtil.class);
-
-    /**
-     * Reduces an image's component size to 8 bits if greater.
-     *
-     * @param inImage Image to reduce
-     * @return Reduced image, or the input image if it already is 8 bits or
-     *         less.
-     */
-    static RenderedOp convertTo8Bits(RenderedOp inImage) {
-        final int componentSize = inImage.getColorModel().getComponentSize(0);
-        if (componentSize != 8) {
-            // This seems to clip the color depth to 8-bit. Not sure why it
-            // works.
-            final ParameterBlock pb = new ParameterBlock();
-            pb.addSource(inImage);
-
-            logger.debug("convertTo8Bits(): converting {}-bit to 8-bit",
-                    componentSize);
-            inImage = JAI.create("format", pb, inImage.getRenderingHints());
-        }
-        return inImage;
-    }
+    private static final Logger LOGGER = LoggerFactory.getLogger(JAIUtil.class);
 
     /**
      * @param inImage Image to crop.
@@ -86,7 +70,7 @@ abstract class JAIUtil {
         if (crop.hasEffect()) {
             final Rectangle cropRegion = crop.getRectangle(
                     new Dimension(inImage.getWidth(), inImage.getHeight()), rf);
-            logger.debug("cropImage(): x: {}; y: {}; width: {}; height: {}",
+            LOGGER.debug("cropImage(): x: {}; y: {}; width: {}; height: {}",
                     cropRegion.x, cropRegion.y,
                     cropRegion.width, cropRegion.height);
             final ParameterBlock pb = new ParameterBlock();
@@ -111,10 +95,37 @@ abstract class JAIUtil {
     }
 
     /**
+     * <p>Reduces an image's component size to 8 bits if greater.</p>
+     *
+     * <p>Pixel values will not be rescaled.</p>
+     *
+     * @param inImage Image to reduce.
+     * @return Reduced image, or the input image if it already is 8 bits or
+     *         less.
+     * @see #rescalePixels(RenderedOp)
+     */
+    static RenderedOp reduceTo8Bits(RenderedOp inImage) {
+        final int componentSize = inImage.getColorModel().getComponentSize(0);
+        if (componentSize > 8) {
+            final ParameterBlock pb = new ParameterBlock();
+            pb.addSource(inImage);
+
+            LOGGER.debug("reduceTo8Bits(): converting {}-bit to 8-bit",
+                    componentSize);
+
+            // See Programming in Java Advanced Imaging sec. 4.5 for an
+            // explanation of the Format operation.
+            inImage = JAI.create("format", pb, inImage.getRenderingHints());
+        }
+        return inImage;
+    }
+
+    /**
      * Linearly scales the pixel values of the given image into an 8-bit range.
      *
      * @param inImage Image to rescale.
      * @return Rescaled image.
+     * @see #reduceTo8Bits(RenderedOp)
      */
     static RenderedOp rescalePixels(RenderedOp inImage) {
         final int targetSize = 8;
@@ -133,7 +144,7 @@ abstract class JAIUtil {
             final double[] offsets = {0};
             pb.add(offsets);
 
-            logger.debug("rescalePixels(): multiplying by {}", multiplier);
+            LOGGER.debug("rescalePixels(): multiplying by {}", multiplier);
             inImage = JAI.create("rescale", pb);
         }
         return inImage;
@@ -147,7 +158,7 @@ abstract class JAIUtil {
      */
     static RenderedOp rotateImage(RenderedOp inImage, Rotate rotate) {
         if (rotate.hasEffect()) {
-            logger.debug("rotateImage(): rotating {} degrees",
+            LOGGER.debug("rotateImage(): rotating {} degrees",
                     rotate.getDegrees());
             final ParameterBlock pb = new ParameterBlock();
             pb.addSource(inImage);
@@ -198,7 +209,7 @@ abstract class JAIUtil {
                 yScale = scale.getPercent() / rf.getScale();
             }
 
-            logger.debug("scaleImage(): width: {}%; height: {}%",
+            LOGGER.debug("scaleImage(): width: {}%; height: {}%",
                     xScale * 100, yScale * 100);
             final ParameterBlock pb = new ParameterBlock();
             pb.addSource(inImage);
@@ -239,7 +250,7 @@ abstract class JAIUtil {
         final Dimension fullSize = new Dimension(sourceWidth, sourceHeight);
 
         if (scale.isUp(fullSize)) {
-            logger.debug("scaleImageUsingSubsampleAverage(): can't upscale; " +
+            LOGGER.debug("scaleImageUsingSubsampleAverage(): can't upscale; " +
                     "invoking scaleImage() instead");
             return scaleImage(inImage, scale,
                     Interpolation.getInstance(Interpolation.INTERP_BILINEAR),
@@ -255,7 +266,7 @@ abstract class JAIUtil {
                 yScale = scale.getPercent() / rf.getScale();
             }
 
-            logger.debug("scaleImageUsingSubsampleAverage(): " +
+            LOGGER.debug("scaleImageUsingSubsampleAverage(): " +
                             "width: {}%; height: {}%",
                     xScale * 100, yScale * 100);
             final ParameterBlock pb = new ParameterBlock();
@@ -393,15 +404,17 @@ abstract class JAIUtil {
         pb.addSource(inImage);
         switch (transpose) {
             case HORIZONTAL:
-                logger.debug("transposeImage(): horizontal");
+                LOGGER.debug("transposeImage(): horizontal");
                 pb.add(TransposeDescriptor.FLIP_HORIZONTAL);
                 break;
             case VERTICAL:
-                logger.debug("transposeImage(): vertical");
+                LOGGER.debug("transposeImage(): vertical");
                 pb.add(TransposeDescriptor.FLIP_VERTICAL);
                 break;
         }
         return JAI.create("transpose", pb);
     }
+
+    private JAIUtil() {}
 
 }

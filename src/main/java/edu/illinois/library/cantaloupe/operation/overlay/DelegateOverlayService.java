@@ -1,58 +1,51 @@
 package edu.illinois.library.cantaloupe.operation.overlay;
 
 import edu.illinois.library.cantaloupe.operation.Color;
-import edu.illinois.library.cantaloupe.operation.OperationList;
-import edu.illinois.library.cantaloupe.script.DelegateScriptDisabledException;
-import edu.illinois.library.cantaloupe.script.ScriptEngine;
-import edu.illinois.library.cantaloupe.script.ScriptEngineFactory;
+import edu.illinois.library.cantaloupe.script.DelegateProxy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.script.ScriptException;
-import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.font.TextAttribute;
 import java.io.File;
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 
-class DelegateOverlayService {
+final class DelegateOverlayService {
+
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(DelegateOverlayService.class);
 
     /**
-     * @param opList
-     * @param fullSize
-     * @param requestUrl
-     * @param requestHeaders
-     * @param clientIp
-     * @param cookies
-     * @return Map with "inset", "position", and "pathname" or "string" keys;
-     *         or null
-     * @throws IOException
-     * @throws ScriptException
-     * @throws DelegateScriptDisabledException
+     * @return Map with {@literal inset}, {@literal position}, and {@literal
+     *         pathname} or {@literal string} keys; or {@literal null}
      */
-    Overlay getOverlay(OperationList opList,
-                       Dimension fullSize,
-                       URL requestUrl,
-                       Map<String,String> requestHeaders,
-                       String clientIp,
-                       Map<String,String> cookies)
-            throws IOException, ScriptException,
-            DelegateScriptDisabledException {
-        final Map<String,Object> defs = overlayProperties(
-                opList, fullSize, requestUrl, requestHeaders, clientIp,
-                cookies);
+    Overlay getOverlay(DelegateProxy proxy) throws ScriptException {
+        final Map<String,Object> defs = overlayProperties(proxy);
         if (defs != null) {
             final int inset = ((Long) defs.get("inset")).intValue();
             final Position position = (Position) defs.get("position");
             final String location = (String) defs.get("image");
             if (location != null) {
                 try {
-                    URL url = new URL(location);
-                    return new ImageOverlay(url, position, inset);
-                } catch (MalformedURLException e) {
-                    return new ImageOverlay(new File(location), position, inset);
+                    URI overlayURI;
+                    // If the location in the configuration starts with a
+                    // supported URI scheme, create a new URI for it.
+                    // Otherwise, get its absolute path and convert that to a
+                    // file: URI.
+                    if (ImageOverlay.SUPPORTED_URI_SCHEMES.stream().anyMatch(location::startsWith)) {
+                        overlayURI = new URI(location);
+                    } else {
+                        overlayURI = Paths.get(location).toUri();
+                    }
+                    return new ImageOverlay(overlayURI, position, inset);
+                } catch (URISyntaxException e) {
+                    LOGGER.error("getOverlay(): {}", e.getMessage());
+                    return null;
                 }
             } else {
                 final String string = (String) defs.get("string");
@@ -122,60 +115,26 @@ class DelegateOverlayService {
      *     </dd>
      * </dl>
      *
-     * @param opList
-     * @param fullSize
-     * @param requestUrl
-     * @param requestHeaders
-     * @param clientIp
-     * @param cookies
-     * @return Map with one of the above structures, or <code>null</code> for
+     * @param proxy
+     * @return Map with one of the above structures, or {@literal null} for
      *         no overlay.
-     * @throws IOException
-     * @throws ScriptException
-     * @throws DelegateScriptDisabledException
      */
-    private Map<String,Object> overlayProperties(
-            OperationList opList, Dimension fullSize, URL requestUrl,
-            Map<String,String> requestHeaders, String clientIp,
-            Map<String,String> cookies)
-            throws IOException, ScriptException,
-            DelegateScriptDisabledException {
-        final Dimension resultingSize = opList.getResultingSize(fullSize);
-        final Map<String,Integer> resultingSizeArg = new HashMap<>();
-        resultingSizeArg.put("width", resultingSize.width);
-        resultingSizeArg.put("height", resultingSize.height);
+    private Map<String,Object> overlayProperties(DelegateProxy proxy)
+            throws ScriptException {
+        final Map<String,Object> resultMap = proxy.getOverlayProperties();
 
-        final ScriptEngine engine = ScriptEngineFactory.getScriptEngine();
-        final String method = "overlay";
-        final Object result = engine.invoke(method,
-                opList.getIdentifier().toString(),           // identifier
-                opList.toMap(fullSize).get("operations"),    // operations
-                resultingSizeArg,                            // resulting_size
-                opList.toMap(fullSize).get("output_format"), // output_format
-                requestUrl.toString(),                       // request_uri
-                requestHeaders,                              // request_headers
-                clientIp,                                    // client_ip
-                cookies);                                    // cookies
-        if (result == null || (result instanceof Boolean && !((Boolean) result))) {
+        if (resultMap.isEmpty()) {
             return null;
         }
 
-        // The result is expected to be a map. Cast it to that and copy its
-        // keys and values into a new map that we can tweak before returning.
-        @SuppressWarnings("unchecked")
-        final Map<String,Object> resultMap = ((Map<String,Object>) result);
-        final Map<String,Object> properties = new HashMap<>();
-
-        for (final String key : resultMap.keySet()) {
-            properties.put(key, resultMap.get(key));
+        // Copy the map into a new one that we can tweak before returning.
+        final Map<String,Object> props = new HashMap<>(resultMap);
+        if (props.get("pathname") != null) {
+            props.put("pathname", new File((String) props.get("pathname")));
         }
-        if (properties.get("pathname") != null) {
-            properties.put("pathname",
-                    new File((String) properties.get("pathname")));
-        }
-        properties.put("position",
-                Position.fromString((String) properties.get("position")));
-        return properties;
+        props.put("position",
+                Position.fromString((String) props.get("position")));
+        return props;
     }
 
 }

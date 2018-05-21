@@ -4,7 +4,6 @@ import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Format;
 
-import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -22,7 +21,8 @@ public class ProcessorFactory {
                 new ImageMagickProcessor(),
                 new JaiProcessor(),
                 new Java2dProcessor(),
-                new KakaduProcessor(),
+                new KakaduDemoProcessor(),
+                new KakaduNativeProcessor(),
                 new OpenJpegProcessor(),
                 new PdfBoxProcessor()));
     }
@@ -34,29 +34,42 @@ public class ProcessorFactory {
      * @param sourceFormat Source format for which to retrieve a processor
      * @return An instance suitable for handling the given source format, based
      *         on configuration settings. The source is already set.
-     * @throws UnsupportedSourceFormatException
-     * @throws ReflectiveOperationException
-     * @throws IOException
      */
-    public Processor getProcessor(final Format sourceFormat)
+    public Processor newProcessor(final Format sourceFormat)
             throws UnsupportedSourceFormatException,
-            ReflectiveOperationException,
-            IOException {
+            InitializationException,
+            ReflectiveOperationException {
         String processorName = getAssignedProcessorName(sourceFormat);
         if (processorName == null) {
             processorName = getFallbackProcessorName();
             if (processorName == null) {
-                throw new ClassNotFoundException("A fallback processor is not defined.");
+                throw new ClassNotFoundException("A fallback processor (" +
+                        Key.PROCESSOR_FALLBACK + ") is not set.");
             }
         }
-        final String className = ProcessorFactory.class.getPackage().getName() +
-                "." + processorName;
-        final Class class_ = Class.forName(className);
-        final Processor processor = (Processor) class_.newInstance();
 
-        processor.setSourceFormat(sourceFormat);
+        // If the processor name contains a dot, assume it includes the package
+        // name.
+        final String className = processorName.contains(".") ?
+                processorName :
+                ProcessorFactory.class.getPackage().getName() + "." + processorName;
 
-        return processor;
+        try {
+            final Class<?> class_ = Class.forName(className);
+            final Processor processor =
+                    (Processor) class_.getDeclaredConstructor().newInstance();
+
+            InitializationException e = processor.getInitializationException();
+            if (e != null) {
+                throw e;
+            }
+
+            processor.setSourceFormat(sourceFormat);
+
+            return processor;
+        } catch (ClassNotFoundException e) {
+            throw new ClassNotFoundException(processorName + " does not exist", e);
+        }
     }
 
     /**

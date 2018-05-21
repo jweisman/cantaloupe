@@ -2,10 +2,10 @@ package edu.illinois.library.cantaloupe.operation;
 
 import edu.illinois.library.cantaloupe.image.Compression;
 import edu.illinois.library.cantaloupe.image.Format;
-import org.apache.commons.lang3.StringUtils;
 
 import java.awt.Dimension;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,10 +23,17 @@ public class Encode implements Operation {
     private Compression compression = Compression.UNDEFINED;
     private Format format = Format.UNKNOWN;
     private boolean interlace = false;
+    private boolean isFrozen = false;
+    private int maxComponentSize = Integer.MAX_VALUE;
     private int quality = MAX_QUALITY;
 
     public Encode(Format format) {
         setFormat(format);
+    }
+
+    @Override
+    public void freeze() {
+        isFrozen = true;
     }
 
     /**
@@ -50,6 +57,14 @@ public class Encode implements Operation {
 
     public Format getFormat() {
         return format;
+    }
+
+    /**
+     * @return Maximum sample size to encode. May be {@link Integer#MAX_VALUE}
+     *         indicating no max.
+     */
+    public int getMaxComponentSize() {
+        return maxComponentSize;
     }
 
     /**
@@ -97,32 +112,73 @@ public class Encode implements Operation {
 
     /**
      * @param color Background color.
+     * @throws IllegalStateException If the instance is frozen.
      */
     public void setBackgroundColor(Color color) {
+        if (isFrozen) {
+            throw new IllegalStateException("Instance is frozen.");
+        }
         this.backgroundColor = color;
     }
 
+    /**
+     * @param compression Compression to set.
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setCompression(Compression compression) {
+        if (isFrozen) {
+            throw new IllegalStateException("Instance is frozen.");
+        }
         this.compression = compression;
     }
 
+    /**
+     * @param format Format to set.
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setFormat(Format format) {
+        if (isFrozen) {
+            throw new IllegalStateException("Instance is frozen.");
+        }
         if (format == null) {
             format = Format.UNKNOWN;
         }
         this.format = format;
     }
 
+    /**
+     * @param interlace Interlacing to set.
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setInterlacing(boolean interlace) {
+        if (isFrozen) {
+            throw new IllegalStateException("Instance is frozen.");
+        }
         this.interlace = interlace;
+    }
+
+    /**
+     * @param depth Maximum sample size to encode. Supply {@literal 0} to
+     *              indicate no max.
+     * @throws IllegalStateException If the instance is frozen.
+     */
+    public void setMaxComponentSize(int depth) {
+        if (isFrozen) {
+            throw new IllegalStateException("Instance is frozen.");
+        }
+        this.maxComponentSize = (depth == 0) ? Integer.MAX_VALUE : depth;
     }
 
     /**
      * @param quality
      * @throws IllegalArgumentException If the given quality is outside the
      *         range of 1-{@link #MAX_QUALITY}.
+     * @throws IllegalStateException If the instance is frozen.
      */
-    public void setQuality(int quality) throws IllegalArgumentException {
+    public void setQuality(int quality) {
+        if (isFrozen) {
+            throw new IllegalStateException("Instance is frozen.");
+        }
         if (quality < 1 || quality > MAX_QUALITY) {
             throw new IllegalArgumentException(
                     "Quality must be in the range of 1-" + MAX_QUALITY + ".");
@@ -139,7 +195,8 @@ public class Encode implements Operation {
      *     compression: String,
      *     format: Media type string,
      *     interlace: Boolean,
-     *     quality: Integer
+     *     quality: Integer,
+     *     max_sample_size: Integer
      * }</pre>
      *
      * @param fullSize Ignored.
@@ -156,7 +213,8 @@ public class Encode implements Operation {
         map.put("format", getFormat().getPreferredMediaType());
         map.put("interlace", isInterlacing());
         map.put("quality", getQuality());
-        return map;
+        map.put("max_sample_size", getMaxComponentSize());
+        return Collections.unmodifiableMap(map);
     }
 
     /**
@@ -181,7 +239,10 @@ public class Encode implements Operation {
         if (getBackgroundColor() != null) {
             parts.add(getBackgroundColor().toRGBHex());
         }
-        return StringUtils.join(parts, "_");
+        if (getMaxComponentSize() != Integer.MAX_VALUE) {
+            parts.add(getMaxComponentSize() + "");
+        }
+        return String.join("_", parts);
     }
 
 }

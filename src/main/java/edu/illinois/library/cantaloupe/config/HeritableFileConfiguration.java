@@ -1,6 +1,6 @@
 package edu.illinois.library.cantaloupe.config;
 
-import edu.illinois.library.cantaloupe.ThreadPool;
+import edu.illinois.library.cantaloupe.async.ThreadPool;
 
 import java.io.File;
 import java.util.Collection;
@@ -24,7 +24,8 @@ abstract class HeritableFileConfiguration extends FileConfiguration {
         for (File file : getFiles()) {
             FileConfigurationWatcher watcher = new FileConfigurationWatcher(file);
             watchers.put(file, watcher);
-            ThreadPool.getInstance().submit(watcher);
+            ThreadPool.getInstance().submit(watcher,
+                    ThreadPool.Priority.LOW);
         }
     }
 

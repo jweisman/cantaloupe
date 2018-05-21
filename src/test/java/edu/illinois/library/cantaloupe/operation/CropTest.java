@@ -1,5 +1,6 @@
 package edu.illinois.library.cantaloupe.operation;
 
+import edu.illinois.library.cantaloupe.image.Orientation;
 import edu.illinois.library.cantaloupe.test.BaseTest;
 import org.junit.Before;
 import org.junit.Test;
@@ -14,22 +15,22 @@ public class CropTest extends BaseTest {
 
     private static final float DELTA = 0.0000001f;
 
-    private Crop crop;
+    private Crop instance;
 
     @Before
     public void setUp() throws Exception {
         super.setUp();
 
-        crop = new Crop();
-        assertEquals(Crop.Unit.PIXELS, crop.getUnit());
-        assertEquals(0f, crop.getX(), DELTA);
-        assertEquals(0f, crop.getY(), DELTA);
-        assertEquals(0f, crop.getWidth(), DELTA);
-        assertEquals(0f, crop.getHeight(), DELTA);
+        instance = new Crop();
+        assertEquals(Crop.Unit.PIXELS, instance.getUnit());
+        assertEquals(0f, instance.getX(), DELTA);
+        assertEquals(0f, instance.getY(), DELTA);
+        assertEquals(0f, instance.getWidth(), DELTA);
+        assertEquals(0f, instance.getHeight(), DELTA);
     }
 
     @Test
-    public void testFromRectangle() {
+    public void fromRectangle() {
         Rectangle rect = new Rectangle(25, 25, 75, 75);
         Crop crop = Crop.fromRectangle(rect);
         assertEquals(crop.getX(), rect.x, DELTA);
@@ -39,14 +40,14 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testApplyOrientationOf0() {
+    public void applyOrientationOf0() {
         final Dimension fullSize = new Dimension(500, 250);
-        crop = new Crop(100, 50, 400, 200);
-        crop.applyOrientation(Orientation.ROTATE_0, fullSize);
-        assertEquals(100, crop.getX(), DELTA);
-        assertEquals(50, crop.getY(), DELTA);
-        assertEquals(400, crop.getWidth(), DELTA);
-        assertEquals(200, crop.getHeight(), DELTA);
+        instance = new Crop(100, 50, 400, 200);
+        instance.applyOrientation(Orientation.ROTATE_0, fullSize);
+        assertEquals(100, instance.getX(), DELTA);
+        assertEquals(50, instance.getY(), DELTA);
+        assertEquals(400, instance.getWidth(), DELTA);
+        assertEquals(200, instance.getHeight(), DELTA);
     }
 
     /**
@@ -54,61 +55,73 @@ public class CropTest extends BaseTest {
      * origin.
      */
     @Test
-    public void testApplyOrientationOf90() {
+    public void applyOrientationOf90() {
         Dimension fullSize = new Dimension(500, 250);
-        crop = new Crop(100, 50, 400, 200);
-        crop.applyOrientation(Orientation.ROTATE_90, fullSize);
-        assertEquals(50, crop.getX(), DELTA);
-        assertEquals(0, crop.getY(), DELTA);
-        assertEquals(200, crop.getWidth(), DELTA);
-        assertEquals(150, crop.getHeight(), DELTA);
+        instance = new Crop(100, 50, 400, 200);
+        instance.applyOrientation(Orientation.ROTATE_90, fullSize);
+        assertEquals(50, instance.getX(), DELTA);
+        assertEquals(0, instance.getY(), DELTA);
+        assertEquals(200, instance.getWidth(), DELTA);
+        assertEquals(150, instance.getHeight(), DELTA);
 
         fullSize = new Dimension(2000, 500);
-        crop = new Crop(100, 100, 1900, 200);
-        crop.applyOrientation(Orientation.ROTATE_90, fullSize);
-        assertEquals(100, crop.getX(), DELTA);
-        assertEquals(0, crop.getY(), DELTA);
-        assertEquals(200, crop.getWidth(), DELTA);
-        assertEquals(400, crop.getHeight(), DELTA);
+        instance = new Crop(100, 100, 1900, 200);
+        instance.applyOrientation(Orientation.ROTATE_90, fullSize);
+        assertEquals(100, instance.getX(), DELTA);
+        assertEquals(0, instance.getY(), DELTA);
+        assertEquals(200, instance.getWidth(), DELTA);
+        assertEquals(400, instance.getHeight(), DELTA);
     }
 
     @Test
-    public void testApplyOrientationOf180() {
+    public void applyOrientationOf180() {
         Dimension fullSize = new Dimension(500, 250);
-        crop = new Crop(100, 50, 400, 200);
-        crop.applyOrientation(Orientation.ROTATE_180, fullSize);
-        assertEquals(0, crop.getX(), DELTA);
-        assertEquals(0, crop.getY(), DELTA);
-        assertEquals(400, crop.getWidth(), DELTA);
-        assertEquals(200, crop.getHeight(), DELTA);
+        instance = new Crop(100, 50, 400, 200);
+        instance.applyOrientation(Orientation.ROTATE_180, fullSize);
+        assertEquals(0, instance.getX(), DELTA);
+        assertEquals(0, instance.getY(), DELTA);
+        assertEquals(400, instance.getWidth(), DELTA);
+        assertEquals(200, instance.getHeight(), DELTA);
     }
 
     /**
      * The crop area rotates clockwise over the image to a top-right origin.
      */
     @Test
-    public void testApplyOrientationOf270() {
+    public void applyOrientationOf270() {
         Dimension fullSize = new Dimension(500, 250);
-        crop = new Crop(100, 50, 400, 200);
-        crop.applyOrientation(Orientation.ROTATE_270, fullSize);
-        assertEquals(250, crop.getX(), DELTA);
-        assertEquals(100, crop.getY(), DELTA);
-        assertEquals(200, crop.getWidth(), DELTA);
-        assertEquals(150, crop.getHeight(), DELTA);
+        instance = new Crop(100, 50, 400, 200);
+        instance.applyOrientation(Orientation.ROTATE_270, fullSize);
+        assertEquals(250, instance.getX(), DELTA);
+        assertEquals(100, instance.getY(), DELTA);
+        assertEquals(200, instance.getWidth(), DELTA);
+        assertEquals(150, instance.getHeight(), DELTA);
 
         fullSize = new Dimension(2000, 500);
-        crop = new Crop(100, 100, 1900, 200);
-        crop.applyOrientation(Orientation.ROTATE_270, fullSize);
-        assertEquals(1700, crop.getX(), DELTA);
-        assertEquals(100, crop.getY(), DELTA);
-        assertEquals(200, crop.getWidth(), DELTA);
-        assertEquals(400, crop.getHeight(), DELTA);
+        instance = new Crop(100, 100, 1900, 200);
+        instance.applyOrientation(Orientation.ROTATE_270, fullSize);
+        assertEquals(1700, instance.getX(), DELTA);
+        assertEquals(100, instance.getY(), DELTA);
+        assertEquals(200, instance.getWidth(), DELTA);
+        assertEquals(400, instance.getHeight(), DELTA);
     }
 
-    /* getRectangle(Dimension) */
+    @Test(expected = IllegalStateException.class)
+    public void applyOrientationThrowsExceptionWhenFrozen() {
+        instance.freeze();
+        Dimension fullSize = new Dimension(500, 250);
+        instance.applyOrientation(Orientation.ROTATE_90, fullSize);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void getRectangleWithNullSize() {
+        Crop crop = new Crop();
+        crop.setFull(true);
+        crop.getRectangle(null);
+    }
 
     @Test
-    public void testGetRectangleWithFull() {
+    public void getRectangleWithFull() {
         final Dimension fullSize = new Dimension(300, 200);
         Crop crop = new Crop();
         crop.setFull(true);
@@ -116,7 +129,7 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testGetRectangleWithSquare() {
+    public void getRectangleWithSquare() {
         final Dimension fullSize = new Dimension(300, 200);
         Crop crop = new Crop();
         crop.setShape(Crop.Shape.SQUARE);
@@ -124,14 +137,14 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testGetRectangleWithPixels() {
+    public void getRectangleWithPixels() {
         final Dimension fullSize = new Dimension(300, 200);
         Crop crop = new Crop(20, 20, 50, 50);
         assertEquals(new Rectangle(20, 20, 50, 50), crop.getRectangle(fullSize));
     }
 
     @Test
-    public void testGetRectangleWithPercentage() {
+    public void getRectangleWithPercentage() {
         final Dimension fullSize = new Dimension(300, 200);
         Crop crop = new Crop(0.2f, 0.2f, 0.5f, 0.5f);
         crop.setUnit(Crop.Unit.PERCENT);
@@ -139,16 +152,14 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testGetRectangleDoesNotExceedFullSizeBounds() {
+    public void getRectangleDoesNotExceedFullSizeBounds() {
         final Dimension fullSize = new Dimension(300, 200);
         Crop crop = new Crop(200f, 150f, 100f, 100f);
         assertEquals(new Rectangle(200, 150, 100, 50), crop.getRectangle(fullSize));
     }
 
-    /* getRectangle(Dimension, ReductionFactor) */
-
     @Test
-    public void testGetRectangleWithReductionFactorWithFull() {
+    public void getRectangleWithReductionFactorWithFull() {
         final Dimension imageSize = new Dimension(300, 200);
         final ReductionFactor rf = new ReductionFactor(2);
         Crop crop = new Crop();
@@ -158,7 +169,7 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testGetRectangleWithReductionFactorWithSquare() {
+    public void getRectangleWithReductionFactorWithSquare() {
         final Dimension fullSize = new Dimension(300, 200);
         final ReductionFactor rf = new ReductionFactor(2);
         Crop crop = new Crop();
@@ -168,7 +179,7 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testGetRectangleWithReductionFactorWithPixels() {
+    public void getRectangleWithReductionFactorWithPixels() {
         final Dimension fullSize = new Dimension(300, 200);
         final ReductionFactor rf = new ReductionFactor(2);
         Crop crop = new Crop(20, 20, 50, 50);
@@ -177,7 +188,7 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testGetRectangleWithReductionFactorWithPercentage() {
+    public void getRectangleWithReductionFactorWithPercentage() {
         final Dimension fullSize = new Dimension(300, 200);
         final ReductionFactor rf = new ReductionFactor(2);
         Crop crop = new Crop(0.2f, 0.2f, 0.5f, 0.5f);
@@ -187,7 +198,7 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testGetRectangleWithReductionFactorDoesNotExceedFullSizeBounds() {
+    public void getRectangleWithReductionFactorDoesNotExceedFullSizeBounds() {
         final Dimension fullSize = new Dimension(300, 200);
         final ReductionFactor rf = new ReductionFactor(2);
         Crop crop = new Crop(200f, 150f, 100f, 100f);
@@ -195,10 +206,8 @@ public class CropTest extends BaseTest {
                 crop.getRectangle(fullSize, rf));
     }
 
-    /* getResultingSize(Dimension) */
-
     @Test
-    public void testGetResultingSize() {
+    public void getResultingSize() {
         Dimension fullSize = new Dimension(200, 200);
         // full
         Crop crop = new Crop();
@@ -214,7 +223,7 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testHasEffect() {
+    public void hasEffect() {
         // new instance
         Crop crop = new Crop();
         assertTrue(crop.hasEffect());
@@ -238,29 +247,77 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testHasEffectWithArguments() {
+    public void hasEffectWithArgumentsWithSquareShape() {
         Dimension fullSize = new Dimension(600, 400);
         OperationList opList = new OperationList();
-        crop.setWidth(600);
-        crop.setHeight(400);
-        assertFalse(crop.hasEffect(fullSize, opList));
 
-        crop = new Crop();
-        crop.setShape(Crop.Shape.SQUARE);
-        assertTrue(crop.hasEffect(fullSize, opList));
+        instance = new Crop();
+        instance.setShape(Crop.Shape.SQUARE);
+        assertTrue(instance.hasEffect(fullSize, opList));
     }
 
     @Test
-    public void testSetHeight() {
+    public void hasEffectWithArgumentsWithFullArea() {
+        Dimension fullSize = new Dimension(600, 400);
+        OperationList opList = new OperationList();
+
+        instance.setWidth(600);
+        instance.setHeight(400);
+        assertFalse(instance.hasEffect(fullSize, opList));
+    }
+
+    @Test
+    public void hasEffectWithArgumentsWithNonzeroOrigin() {
+        Dimension fullSize = new Dimension(600, 400);
+        OperationList opList = new OperationList();
+
+        instance.setX(5);
+        instance.setY(5);
+        instance.setWidth(595);
+        instance.setHeight(395);
+        assertTrue(instance.hasEffect(fullSize, opList));
+
+        instance.setWidth(600);
+        instance.setHeight(400);
+        assertTrue(instance.hasEffect(fullSize, opList));
+    }
+
+    @Test
+    public void hasEffectWithArgumentsWithCropByPercent() {
+        Dimension fullSize = new Dimension(600, 400);
+        OperationList opList = new OperationList();
+
+        instance.setUnit(Crop.Unit.PERCENT);
+        instance.setX(0f);
+        instance.setY(0f);
+        instance.setWidth(1f);
+        instance.setHeight(1f);
+        assertFalse(instance.hasEffect(fullSize, opList));
+
+        instance.setX(0f);
+        instance.setY(0f);
+        instance.setWidth(0.8f);
+        instance.setHeight(0.8f);
+        assertTrue(instance.hasEffect(fullSize, opList));
+
+        instance.setX(0.1f);
+        instance.setY(0.1f);
+        instance.setWidth(1f);
+        instance.setHeight(1f);
+        assertTrue(instance.hasEffect(fullSize, opList));
+    }
+
+    @Test
+    public void setHeight() {
         float height = 50f;
-        this.crop.setHeight(height);
-        assertEquals(height, this.crop.getHeight(), DELTA);
+        this.instance.setHeight(height);
+        assertEquals(height, this.instance.getHeight(), DELTA);
     }
 
     @Test
-    public void testSetNegativeHeight() {
+    public void setHeightWithNegativeHeight() {
         try {
-            this.crop.setHeight(-1f);
+            this.instance.setHeight(-1f);
             fail("Expected exception");
         } catch (IllegalArgumentException e) {
             assertEquals("Height must be a positive integer", e.getMessage());
@@ -268,9 +325,9 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testSetZeroHeight() {
+    public void setHeightWithZeroHeight() {
         try {
-            crop.setHeight(0f);
+            instance.setHeight(0f);
             fail("Expected exception");
         } catch (IllegalArgumentException e) {
             assertEquals("Height must be a positive integer", e.getMessage());
@@ -278,27 +335,45 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testSetMoreThan100PercentHeight() {
+    public void setHeightWithGreaterThan100PercentHeight() {
         try {
-            crop.setUnit(Crop.Unit.PERCENT);
-            crop.setHeight(1.2f);
+            instance.setUnit(Crop.Unit.PERCENT);
+            instance.setHeight(1.2f);
             fail("Expected exception");
         } catch (IllegalArgumentException e) {
             assertEquals("Height percentage must be <= 1", e.getMessage());
         }
     }
 
+    @Test(expected = IllegalStateException.class)
+    public void setHeightThrowsExceptionWhenInstanceIsFrozen() {
+        instance.freeze();
+        instance.setHeight(30f);
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void setShapeThrowsExceptionWhenInstanceIsFrozen() {
+        instance.freeze();
+        instance.setShape(Crop.Shape.SQUARE);
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void setUnitThrowsExceptionWhenInstanceIsFrozen() {
+        instance.freeze();
+        instance.setUnit(Crop.Unit.PIXELS);
+    }
+
     @Test
-    public void testSetWidth() {
+    public void setWidth() {
         Float width = 50f;
-        crop.setWidth(width);
-        assertEquals(width, this.crop.getWidth(), DELTA);
+        instance.setWidth(width);
+        assertEquals(width, this.instance.getWidth(), DELTA);
     }
 
     @Test
-    public void testSetNegativeWidth() {
+    public void setWidthWithNegativeWidth() {
         try {
-            crop.setWidth(-1f);
+            instance.setWidth(-1f);
             fail("Expected exception");
         } catch (IllegalArgumentException e) {
             assertEquals("Width must be a positive integer", e.getMessage());
@@ -306,9 +381,9 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testSetZeroWidth() {
+    public void setWidthWithZeroWidth() {
         try {
-            crop.setWidth(0f);
+            instance.setWidth(0f);
             fail("Expected exception");
         } catch (IllegalArgumentException e) {
             assertEquals("Width must be a positive integer", e.getMessage());
@@ -316,27 +391,33 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testSetMoreThan100PercentWidth() {
+    public void setWidthWithGreaterThan100PercentWidth() {
         try {
-            crop.setUnit(Crop.Unit.PERCENT);
-            crop.setWidth(1.2f);
+            instance.setUnit(Crop.Unit.PERCENT);
+            instance.setWidth(1.2f);
             fail("Expected exception");
         } catch (IllegalArgumentException e) {
             assertEquals("Width percentage must be <= 1", e.getMessage());
         }
     }
 
-    @Test
-    public void testSetX() {
-        float x = 50f;
-        crop.setX(x);
-        assertEquals(x, this.crop.getX(), DELTA);
+    @Test(expected = IllegalStateException.class)
+    public void setWidthThrowsExceptionWhenInstanceIsFrozen() {
+        instance.freeze();
+        instance.setWidth(30f);
     }
 
     @Test
-    public void testSetNegativeX() {
+    public void setX() {
+        float x = 50f;
+        instance.setX(x);
+        assertEquals(x, this.instance.getX(), DELTA);
+    }
+
+    @Test
+    public void setXWithNegativeX() {
         try {
-            crop.setX(-1f);
+            instance.setX(-1f);
             fail("Expected exception");
         } catch (IllegalArgumentException e) {
             assertEquals("X must be a positive float", e.getMessage());
@@ -344,27 +425,33 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testSetMoreThan100PercentX() {
+    public void setXWithGreaterThan100PercentX() {
         try {
-            crop.setUnit(Crop.Unit.PERCENT);
-            crop.setX(1.2f);
+            instance.setUnit(Crop.Unit.PERCENT);
+            instance.setX(1.2f);
             fail("Expected exception");
         } catch (IllegalArgumentException e) {
             assertEquals("X percentage must be <= 1", e.getMessage());
         }
     }
 
-    @Test
-    public void testSetY() {
-        float y = 50f;
-        crop.setY(y);
-        assertEquals(y, this.crop.getY(), DELTA);
+    @Test(expected = IllegalStateException.class)
+    public void setXThrowsExceptionWhenInstanceIsFrozen() {
+        instance.freeze();
+        instance.setX(30f);
     }
 
     @Test
-    public void testSetNegativeY() {
+    public void setY() {
+        float y = 50f;
+        instance.setY(y);
+        assertEquals(y, this.instance.getY(), DELTA);
+    }
+
+    @Test
+    public void setYWithNegativeY() {
         try {
-            crop.setY(-1f);
+            instance.setY(-1f);
             fail("Expected exception");
         } catch (IllegalArgumentException e) {
             assertEquals("Y must be a positive float", e.getMessage());
@@ -372,17 +459,21 @@ public class CropTest extends BaseTest {
     }
 
     @Test
-    public void testSetMoreThan100PercentY() {
+    public void setYWithGreaterThan100PercentY() {
         try {
-            crop.setUnit(Crop.Unit.PERCENT);
-            crop.setY(1.2f);
+            instance.setUnit(Crop.Unit.PERCENT);
+            instance.setY(1.2f);
             fail("Expected exception");
         } catch (IllegalArgumentException e) {
             assertEquals("Y percentage must be <= 1", e.getMessage());
         }
     }
 
-    /* toMap() */
+    @Test(expected = IllegalStateException.class)
+    public void setYThrowsExceptionWhenInstanceIsFrozen() {
+        instance.freeze();
+        instance.setY(30f);
+    }
 
     @Test
     public void testToMap() {
@@ -400,7 +491,12 @@ public class CropTest extends BaseTest {
         assertEquals(50, map.get("height"));
     }
 
-    /* toString() */
+    @Test(expected = UnsupportedOperationException.class)
+    public void toMapReturnsUnmodifiableMap() {
+        Dimension fullSize = new Dimension(100, 100);
+        Map<String,Object> map = instance.toMap(fullSize);
+        map.put("test", "test");
+    }
 
     @Test
     public void testToString() {
@@ -428,62 +524,40 @@ public class CropTest extends BaseTest {
         assertEquals("0%,0%,50%,40%", crop.toString());
     }
 
-    /* validate() */
-
     @Test
-    public void testValidateWithValidInstance() {
+    public void validateWithValidInstance() {
         Dimension fullSize = new Dimension(1000, 1000);
-        crop.setWidth(100);
-        crop.setHeight(100);
-        try {
-            crop.validate(fullSize);
-        } catch (ValidationException e) {
-            fail(e.getMessage());
-        }
+        instance.setWidth(100);
+        instance.setHeight(100);
+        instance.validate(fullSize);
     }
 
-    @Test
-    public void testValidateWithOutOfBoundsCrop() {
-        // OOB X
+    @Test(expected = IllegalArgumentException.class)
+    public void validateWithOutOfBoundsCropX() {
         Dimension fullSize = new Dimension(1000, 1000);
         Crop crop = new Crop(1001, 0, 5, 5);
-        try {
-            crop.validate(fullSize);
-            fail("Expected exception");
-        } catch (ValidationException e) {
-            // pass
-        }
-
-        // OOB Y
-        crop = new Crop(0, 1001, 5, 5);
-        try {
-            crop.validate(fullSize);
-            fail("Expected exception");
-        } catch (ValidationException e) {
-            // pass
-        }
+        crop.validate(fullSize);
     }
 
-    @Test
-    public void testValidateWithZeroDimensionCrop() {
-        // X
+    @Test(expected = IllegalArgumentException.class)
+    public void validateWithOutOfBoundsCropY() {
+        Dimension fullSize = new Dimension(1000, 1000);
+        Crop crop = new Crop(0, 1001, 5, 5);
+        crop.validate(fullSize);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void validateWithZeroDimensionCropX() {
         Dimension fullSize = new Dimension(1000, 1000);
         Crop crop = new Crop(1000, 0, 100, 100);
-        try {
-            crop.validate(fullSize);
-            fail("Expected exception");
-        } catch (ValidationException e) {
-            // pass
-        }
+        crop.validate(fullSize);
+    }
 
-        // Y
-        crop = new Crop(0, 1000, 100, 100);
-        try {
-            crop.validate(fullSize);
-            fail("Expected exception");
-        } catch (ValidationException e) {
-            // pass
-        }
+    @Test(expected = IllegalArgumentException.class)
+    public void validateWithZeroDimensionCrop() {
+        Dimension fullSize = new Dimension(1000, 1000);
+        Crop crop = new Crop(0, 1000, 100, 100);
+        crop.validate(fullSize);
     }
 
 }

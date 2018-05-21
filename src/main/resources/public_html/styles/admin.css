@@ -18,18 +18,18 @@ footer {
 }
 
 section {
-    margin-bottom: 2em;
+    margin-bottom: 3em;
 }
 
 h2 {
-    font-size: 1.8em;
+    font-size: 1.6em;
     margin-top: 0px;
 }
 
-h3 { font-size: 1.6em; }
-h4 { font-size: 1.4em; }
-h5 { font-size: 1.2em; }
-h6 { font-size: 1em; }
+h3 { font-size: 1.4em; }
+h4 { font-size: 1.2em; }
+h5 { font-size: 1em; }
+h6 { font-size: 0.8em; }
 
 pre {
     background-color: #1b2e40;
@@ -38,14 +38,32 @@ pre {
     overflow-x: scroll;
 }
 
+var, span.filename {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.85em;
+    font-style: normal;
+}
+
 table, .table, .checkbox label, .radio label {
     font-size: 1em;
 }
 
-.table > tbody > tr > td:first-child {
+.table td:first-child {
     text-align: right;
     vertical-align: middle;
+}
+
+#cl-status-memory td:first-child,
+#cl-proxy-headers td:first-child {
     width: 30%;
+}
+
+#cl-proxy-headers td:first-child {
+    white-space: nowrap;
+}
+
+#cl-status-internal-caches td:first-child {
+    width: 70%;
 }
 
 .list-group-item {
@@ -59,22 +77,7 @@ table, .table, .checkbox label, .radio label {
 
 textarea.form-control {
     font-family: 'Consolas', 'Monaco', monospace;
-    font-size: 0.9em;
-}
-
-#cl-status td:first-child {
-    width: 40%;
-}
-
-#cl-status ul {
-    margin-left: 0px;
-    padding-left: 0px;
-}
-
-#cl-status li {
-    list-style-type: none;
-    margin-left: 2em;
-    text-indent: -2em;
+    font-size: 0.85em;
 }
 
 .nav > li.list-group-item > a {
@@ -83,4 +86,13 @@ textarea.form-control {
 
 table.cl-source-format-assignments td:first-child {
     text-align: right;
+}
+
+#cl-processor-warnings td {
+    color: #2b3e50;
+}
+
+#cl-processor-warnings ul {
+    margin-top: 0px;
+    margin-bottom: 0px;
 }

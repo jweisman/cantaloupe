@@ -4,6 +4,7 @@ import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Compression;
 import edu.illinois.library.cantaloupe.image.Info;
+import edu.illinois.library.cantaloupe.image.Orientation;
 import edu.illinois.library.cantaloupe.operation.Color;
 import edu.illinois.library.cantaloupe.operation.ColorTransform;
 import edu.illinois.library.cantaloupe.operation.Crop;
@@ -12,15 +13,14 @@ import edu.illinois.library.cantaloupe.operation.Encode;
 import edu.illinois.library.cantaloupe.operation.Normalize;
 import edu.illinois.library.cantaloupe.operation.Operation;
 import edu.illinois.library.cantaloupe.operation.OperationList;
-import edu.illinois.library.cantaloupe.operation.Orientation;
 import edu.illinois.library.cantaloupe.operation.Rotate;
 import edu.illinois.library.cantaloupe.operation.Scale;
 import edu.illinois.library.cantaloupe.operation.Sharpen;
 import edu.illinois.library.cantaloupe.operation.Transpose;
+import edu.illinois.library.cantaloupe.process.ArrayListOutputConsumer;
+import edu.illinois.library.cantaloupe.process.Pipe;
+import edu.illinois.library.cantaloupe.process.ProcessStarter;
 import org.apache.commons.lang3.StringUtils;
-import org.im4java.process.ArrayListOutputConsumer;
-import org.im4java.process.Pipe;
-import org.im4java.process.ProcessStarter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,14 +32,16 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * <p>Processor using the GraphicsMagick <code>gm</code> command-line tool.
+ * <p>Processor using the GraphicsMagick {@literal gm} command-line tool.
  * Tested with version 1.3.21; other versions may or may not work.</p>
  *
  * <p>Implementation notes:</p>
@@ -59,40 +61,70 @@ import java.util.Set;
 class GraphicsMagickProcessor extends AbstractMagickProcessor
         implements StreamProcessor {
 
-    private static Logger logger = LoggerFactory.
-            getLogger(GraphicsMagickProcessor.class);
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(GraphicsMagickProcessor.class);
 
-    // Lazy-initialized by getFormats()
-    private static Map<Format, Set<Format>> supportedFormats;
+    private static final String BINARY_NAME = "gm";
+
+    private static final AtomicBoolean initializationAttempted =
+            new AtomicBoolean(false);
+    private static InitializationException initializationException;
+
+    /**
+     * Initialized by {@link #readFormats()}.
+     */
+    private static final Map<Format, Set<Format>> supportedFormats =
+            new HashMap<>();
+
+    private static String getPath() {
+        String path = Configuration.getInstance().
+                getString(Key.GRAPHICSMAGICKPROCESSOR_PATH_TO_BINARIES);
+        if (path != null && path.length() > 0) {
+            path = StringUtils.stripEnd(path, File.separator) + File.separator +
+                    BINARY_NAME;
+        } else {
+            path = BINARY_NAME;
+        }
+        return path;
+    }
+
+    /**
+     * Performs one-time class-level/shared initialization.
+     */
+    private static synchronized void initialize() {
+        initializationAttempted.set(true);
+        readFormats();
+    }
 
     /**
      * @return Map of available output formats for all known source formats,
-     * based on information reported by <code>gm version</code>.
+     *         based on information reported by {@literal gm version}. The
+     *         result is cached.
      */
-    private static synchronized Map<Format, Set<Format>> getFormats() {
-        if (supportedFormats == null) {
-            final Set<Format> formats = new HashSet<>();
-            final Set<Format> outputFormats = new HashSet<>();
+    private static synchronized Map<Format, Set<Format>> readFormats() {
+        if (supportedFormats.isEmpty()) {
+            final Set<Format> sourceFormats = EnumSet.noneOf(Format.class);
+            final Set<Format> outputFormats = EnumSet.noneOf(Format.class);
 
             // Get the output of the `gm version` command, which contains
             // a list of all optional formats.
             final ProcessBuilder pb = new ProcessBuilder();
             final List<String> command = new ArrayList<>();
-            command.add(getPath("gm"));
+            command.add(getPath());
             command.add("version");
             pb.command(command);
-            final String commandString = StringUtils.join(pb.command(), " ");
+            final String commandString = String.join(" ", pb.command());
 
             try {
-                logger.info("getFormats(): invoking {}", commandString);
+                LOGGER.debug("readFormats(): invoking {}", commandString);
                 final Process process = pb.start();
 
-                try (final InputStream processInputStream = process.getInputStream()) {
-                    BufferedReader stdInput = new BufferedReader(
-                            new InputStreamReader(processInputStream));
+                final InputStream processInputStream = process.getInputStream();
+                try (BufferedReader bReader = new BufferedReader(
+                        new InputStreamReader(processInputStream, "UTF-8"))) {
                     String s;
                     boolean read = false;
-                    while ((s = stdInput.readLine()) != null) {
+                    while ((s = bReader.readLine()) != null) {
                         if (s.contains("Feature Support")) {
                             read = true; // start reading
                         } else if (s.contains("Host type:")) {
@@ -101,21 +133,21 @@ class GraphicsMagickProcessor extends AbstractMagickProcessor
                         if (read) {
                             s = s.trim();
                             if (s.startsWith("JPEG-2000 ") && s.endsWith(" yes")) {
-                                formats.add(Format.JP2);
+                                sourceFormats.add(Format.JP2);
                                 outputFormats.add(Format.JP2);
                             } else if (s.startsWith("JPEG ") && s.endsWith(" yes")) {
-                                formats.add(Format.JPG);
+                                sourceFormats.add(Format.JPG);
                                 outputFormats.add(Format.JPG);
                             } else if (s.startsWith("PNG ") && s.endsWith(" yes")) {
-                                formats.add(Format.PNG);
+                                sourceFormats.add(Format.PNG);
                                 outputFormats.add(Format.PNG);
                             } else if (s.startsWith("Ghostscript") && s.endsWith(" yes")) {
-                                formats.add(Format.PDF);
+                                sourceFormats.add(Format.PDF);
                             } else if (s.startsWith("TIFF ") && s.endsWith(" yes")) {
-                                formats.add(Format.TIF);
+                                sourceFormats.add(Format.TIF);
                                 outputFormats.add(Format.TIF);
                             } else if (s.startsWith("WebP ") && s.endsWith(" yes")) {
-                                formats.add(Format.WEBP);
+                                sourceFormats.add(Format.WEBP);
                                 outputFormats.add(Format.WEBP);
                             }
                         }
@@ -125,58 +157,72 @@ class GraphicsMagickProcessor extends AbstractMagickProcessor
                     // Add formats that are not listed in the output of
                     // "gm version" but are definitely available
                     // (http://www.graphicsmagick.org/formats.html)
-                    formats.add(Format.BMP);
-                    formats.add(Format.DCM);
-                    formats.add(Format.GIF);
-                    // GIF output is buggy in GM 1.3.21 (returned images have
-                    // improper dimensions).
-                    //outputFormats.add(Format.GIF);
-                } catch (InterruptedException e) {
-                    logger.error("getFormats(): ", e.getMessage());
-                }
-            } catch (IOException e) {
-                logger.error("getFormats(): ", e.getMessage());
-            }
+                    sourceFormats.add(Format.BMP);
+                    sourceFormats.add(Format.DCM);
+                    sourceFormats.add(Format.GIF);
+                    outputFormats.add(Format.GIF);
 
-            supportedFormats = new HashMap<>();
-            for (Format format : formats) {
-                supportedFormats.put(format, outputFormats);
+                    for (Format format : sourceFormats) {
+                        supportedFormats.put(format, outputFormats);
+                    }
+                }
+            } catch (IOException | InterruptedException e) {
+                initializationException = new InitializationException(e);
+                // This is safe to swallow.
             }
         }
         return supportedFormats;
     }
 
     /**
-     * @param binaryName Name of an executable.
-     * @return
+     * For testing only!
      */
-    private static String getPath(final String binaryName) {
-        String path = Configuration.getInstance().
-                getString(Key.GRAPHICSMAGICKPROCESSOR_PATH_TO_BINARIES);
-        if (path != null && path.length() > 0) {
-            path = StringUtils.stripEnd(path, File.separator) + File.separator +
-                    binaryName;
-        } else {
-            path = binaryName;
+    static synchronized void resetInitialization() {
+        initializationAttempted.set(false);
+        initializationException = null;
+        supportedFormats.clear();
+    }
+
+    GraphicsMagickProcessor() {
+        if (!initializationAttempted.get()) {
+            initialize();
         }
-        return path;
     }
 
     @Override
     public Set<Format> getAvailableOutputFormats() {
-        Set<Format> formats = getFormats().get(format);
+        Set<Format> formats = readFormats().get(sourceFormat);
         if (formats == null) {
-            formats = new HashSet<>();
+            formats = Collections.unmodifiableSet(Collections.emptySet());
         }
         return formats;
     }
 
     private List<String> getConvertArguments(final OperationList ops,
                                              final Info imageInfo) {
-        final List<String> args = new ArrayList<>();
-        args.add(getPath("gm"));
+        final List<String> args = new ArrayList<>(30);
+        args.add(getPath());
         args.add("convert");
-        args.add(format.getPreferredExtension() + ":-"); // read from stdin
+
+        // If we need to rasterize, and the op list contains a scale operation,
+        // see if we can use it to compute a scale-appropriate DPI.
+        // This needs to be done before the source argument is added.
+        if (Format.ImageType.VECTOR.equals(imageInfo.getSourceFormat().getImageType())) {
+            Scale scale = (Scale) ops.getFirst(Scale.class);
+            if (scale == null) {
+                scale = new Scale();
+            }
+            args.add("-density");
+            args.add("" + new RasterizationHelper().getDPI(scale,
+                    imageInfo.getSize()));
+        }
+
+        int pageIndex = getGMImageIndex(
+                (String) ops.getOptions().get("page"),
+                imageInfo.getSourceFormat());
+
+        // :- = read from stdin
+        args.add(sourceFormat.getPreferredExtension() + ":-[" + pageIndex + "]");
 
         Encode encode = (Encode) ops.getFirst(Encode.class);
 
@@ -202,7 +248,6 @@ class GraphicsMagickProcessor extends AbstractMagickProcessor
                 args.add("-normalize");
             } else if (op instanceof Crop) {
                 Crop crop = (Crop) op;
-                crop.applyOrientation(imageInfo.getOrientation(), fullSize);
                 if (crop.hasEffect(fullSize, ops)) {
                     args.add("-crop");
                     if (crop.getShape().equals(Crop.Shape.SQUARE)) {
@@ -246,20 +291,26 @@ class GraphicsMagickProcessor extends AbstractMagickProcessor
 
                     args.add("-resize");
                     if (scale.getPercent() != null) {
-                        final String arg = (scale.getPercent() * 100) + "%";
-                        args.add(arg);
-                    } else if (scale.getMode() == Scale.Mode.ASPECT_FIT_WIDTH) {
-                        args.add(scale.getWidth().toString());
-                    } else if (scale.getMode() == Scale.Mode.ASPECT_FIT_HEIGHT) {
-                        args.add(scale.getHeight().toString());
-                    } else if (scale.getMode() == Scale.Mode.NON_ASPECT_FILL) {
-                        final String arg = String.format("%dx%d!",
-                                scale.getWidth(), scale.getHeight());
-                        args.add(arg);
-                    } else if (scale.getMode() == Scale.Mode.ASPECT_FIT_INSIDE) {
-                        final String arg = String.format("%dx%d",
-                                scale.getWidth(), scale.getHeight());
-                        args.add(arg);
+                        args.add((scale.getPercent() * 100) + "%");
+                    } else {
+                        switch (scale.getMode()) {
+                            case ASPECT_FIT_WIDTH:
+                                args.add(scale.getWidth().toString() + "x");
+                                break;
+                            case ASPECT_FIT_HEIGHT:
+                                args.add("x" + scale.getHeight().toString());
+                                break;
+                            case NON_ASPECT_FILL:
+                                String arg = String.format("%dx%d!",
+                                        scale.getWidth(), scale.getHeight());
+                                args.add(arg);
+                                break;
+                            case ASPECT_FIT_INSIDE:
+                                arg = String.format("%dx%d",
+                                        scale.getWidth(), scale.getHeight());
+                                args.add(arg);
+                                break;
+                        }
                     }
                 }
             } else if (op instanceof Transpose) {
@@ -327,9 +378,9 @@ class GraphicsMagickProcessor extends AbstractMagickProcessor
 
     /**
      * @param filter
-     * @return String suitable for passing to `gm convert`'s
-     *         <code>-filter</code> argument, or <code>null</code> if an
-     *         equivalent is unknown.
+     * @return String suitable for passing to {@literal gm convert}'s
+     *         {@literal -filter} argument, or {@literal null} if an equivalent
+     *         is unknown.
      */
     private String getGMFilter(Scale.Filter filter) {
         // http://www.graphicsmagick.org/GraphicsMagick.html#details-filter
@@ -355,9 +406,28 @@ class GraphicsMagickProcessor extends AbstractMagickProcessor
     }
 
     /**
-     * @param compression May be <code>null</code>.
-     * @return String suitable for passing to gm convert's
-     *         <code>-compress</code> argument.
+     * @param pageStr      Client-provided page number.
+     * @param sourceFormat Format of the source image.
+     * @return             GraphicsMagick image index argument.
+     */
+    private int getGMImageIndex(String pageStr, Format sourceFormat) {
+        int index = 0;
+        if (pageStr != null && Format.PDF.equals(sourceFormat)) {
+            try {
+                index = Integer.parseInt(pageStr) - 1;
+            } catch (NumberFormatException e) {
+                LOGGER.info("Page number from URI query string is not " +
+                        "an integer; using page 1.");
+            }
+            index = Math.max(index, 0);
+        }
+        return index;
+    }
+
+    /**
+     * @param compression May be {@literal null}.
+     * @return            String suitable for passing to {@literal
+     *                    gm convert}'s {@literal -compress} argument.
      */
     private String getGMTIFFCompression(Compression compression) {
         if (compression != null) {
@@ -376,18 +446,26 @@ class GraphicsMagickProcessor extends AbstractMagickProcessor
     }
 
     @Override
+    public InitializationException getInitializationException() {
+        if (!initializationAttempted.get()) {
+            initialize();
+        }
+        return initializationException;
+    }
+
+    @Override
     public void process(final OperationList ops,
                         final Info imageInfo,
                         final OutputStream outputStream)
             throws ProcessorException {
         super.process(ops, imageInfo, outputStream);
 
-        try (InputStream inputStream = streamSource.newInputStream()) {
+        try (InputStream inputStream = streamFactory.newInputStream()) {
             final List<String> args = getConvertArguments(ops, imageInfo);
             final ProcessStarter cmd = new ProcessStarter();
             cmd.setInputProvider(new Pipe(inputStream, null));
             cmd.setOutputConsumer(new Pipe(null, outputStream));
-            logger.info("process(): invoking {}", StringUtils.join(args, " "));
+            LOGGER.info("process(): invoking {}", String.join(" ", args));
             cmd.run(args);
         } catch (Exception e) {
             throw new ProcessorException(e.getMessage(), e);
@@ -395,17 +473,17 @@ class GraphicsMagickProcessor extends AbstractMagickProcessor
     }
 
     @Override
-    public Info readImageInfo() throws ProcessorException {
-        try (InputStream inputStream = streamSource.newInputStream()) {
+    public Info readImageInfo() throws IOException {
+        try (InputStream inputStream = streamFactory.newInputStream()) {
             final List<String> args = new ArrayList<>();
-            args.add(getPath("gm"));
+            args.add(getPath());
             args.add("identify");
             args.add("-ping");
             args.add("-format");
             // We need to read this even when not respecting orientation,
             // because GM's crop operation is orientation-unaware.
             args.add("%w\n%h\n%[EXIF:Orientation]");
-            args.add(format.getPreferredExtension() + ":-");
+            args.add(sourceFormat.getPreferredExtension() + ":-");
 
             final ArrayListOutputConsumer consumer =
                     new ArrayListOutputConsumer();
@@ -413,31 +491,40 @@ class GraphicsMagickProcessor extends AbstractMagickProcessor
             final ProcessStarter cmd = new ProcessStarter();
             cmd.setInputProvider(new Pipe(inputStream, null));
             cmd.setOutputConsumer(consumer);
-            logger.info("readImageInfo(): invoking {}",
-                    StringUtils.join(args, " ").replace("\n", ""));
+            final String cmdString = String.join(" ", args).replace("\n", "");
+            LOGGER.info("readImageInfo(): invoking {}", cmdString);
             cmd.run(args);
 
             final List<String> output = consumer.getOutput();
-            final int width = Integer.parseInt(output.get(0));
-            final int height = Integer.parseInt(output.get(1));
-            // GM is not tile-aware, so set the tile size to the full
-            // dimensions.
-            final Info info = new Info(width, height, width, height,
-                    getSourceFormat());
-            // Do we have an EXIF orientation to deal with?
-            if (output.size() > 2) {
-                try {
-                    final int exifOrientation = Integer.parseInt(output.get(2));
-                    final Orientation orientation =
-                            Orientation.forEXIFOrientation(exifOrientation);
-                    info.getImages().get(0).setOrientation(orientation);
-                } catch (IllegalArgumentException e) {
-                    // whatever
+            if (!output.isEmpty()) {
+                final int width = Integer.parseInt(output.get(0));
+                final int height = Integer.parseInt(output.get(1));
+                // GM is not tile-aware, so set the tile size to the full
+                // dimensions.
+                final Info info = Info.builder()
+                        .withSize(width, height)
+                        .withTileSize(width, height)
+                        .withFormat(sourceFormat)
+                        .build();
+                // Do we have an EXIF orientation to deal with?
+                if (output.size() > 2) {
+                    try {
+                        final int exifOrientation = Integer.parseInt(output.get(2));
+                        final Orientation orientation =
+                                Orientation.forEXIFOrientation(exifOrientation);
+                        info.getImages().get(0).setOrientation(orientation);
+                    } catch (IllegalArgumentException e) {
+                        // whatever
+                    }
                 }
+                return info;
             }
-            return info;
+            throw new IOException("readImageInfo(): nothing received on " +
+                    "stdout from command: " + cmdString);
+        } catch (IOException e) {
+            throw e;
         } catch (Exception e) {
-            throw new ProcessorException(e.getMessage(), e);
+            throw new IOException(e);
         }
     }
 

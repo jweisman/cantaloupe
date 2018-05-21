@@ -1,691 +1,513 @@
 package edu.illinois.library.cantaloupe.resource.iiif.v2;
 
+import edu.illinois.library.cantaloupe.Application;
 import edu.illinois.library.cantaloupe.RestletApplication;
 import edu.illinois.library.cantaloupe.config.Configuration;
-import edu.illinois.library.cantaloupe.config.ConfigurationFactory;
 import edu.illinois.library.cantaloupe.config.Key;
-import edu.illinois.library.cantaloupe.image.Format;
+import edu.illinois.library.cantaloupe.http.Headers;
+import edu.illinois.library.cantaloupe.http.Method;
+import edu.illinois.library.cantaloupe.http.ResourceException;
+import edu.illinois.library.cantaloupe.http.Response;
 import edu.illinois.library.cantaloupe.image.Identifier;
 import edu.illinois.library.cantaloupe.operation.OperationList;
-import edu.illinois.library.cantaloupe.resource.AbstractResource;
 import edu.illinois.library.cantaloupe.resource.ResourceTest;
+import edu.illinois.library.cantaloupe.resource.iiif.ImageResourceTester;
 import edu.illinois.library.cantaloupe.test.TestUtil;
-import org.apache.commons.io.FileUtils;
+import edu.illinois.library.cantaloupe.util.SystemUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.junit.Test;
-import org.restlet.data.CacheDirective;
-import org.restlet.data.ChallengeResponse;
-import org.restlet.data.ChallengeScheme;
-import org.restlet.data.Disposition;
-import org.restlet.data.Header;
-import org.restlet.data.Status;
-import org.restlet.resource.ClientResource;
-import org.restlet.resource.ResourceException;
 
-import java.awt.Dimension;
-import java.io.File;
-import java.net.URL;
-import java.util.HashMap;
+import java.net.URI;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
+import static edu.illinois.library.cantaloupe.test.Assert.HTTPAssert.*;
 import static org.junit.Assert.*;
+import static org.junit.Assume.assumeTrue;
 
 public class ImageResourceTest extends ResourceTest {
 
+    private static final String IMAGE = "jpg-rgb-64x56x8-baseline.jpg";
+
+    private ImageResourceTester tester = new ImageResourceTester();
+
     @Override
-    protected ClientResource getClientForUriPath(String path) {
-        return super.getClientForUriPath(RestletApplication.IIIF_2_PATH + path);
+    protected String getEndpointPath() {
+        return RestletApplication.IIIF_2_PATH;
     }
 
     @Test
-    public void testAuthorizationDelegateWithBooleanReturnValue() throws Exception {
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.jpg");
-        client.get();
-        assertEquals(Status.SUCCESS_OK, client.getStatus());
-
-        try {
-            client = getClientForUriPath("/forbidden.jpg/full/full/0/default.jpg");
-            client.get();
-            fail("Expected exception");
-        } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_FORBIDDEN, client.getStatus());
-        }
+    public void testGETAuthorizationWhenAuthorized() {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testAuthorizationWhenAuthorized(uri);
     }
 
     @Test
-    public void testAuthorizationDelegateWithHashReturnValue() throws Exception {
-        ClientResource client = getClientForUriPath("/redirect.jpg/full/full/0/default.jpg");
-        client.setFollowingRedirects(false);
-        client.get();
-        assertEquals(Status.REDIRECTION_SEE_OTHER, client.getStatus());
-        assertEquals("http://example.org/", client.getLocationRef().toString());
+    public void testGETAuthorizationWhenNotAuthorized() {
+        URI uri = getHTTPURI("/forbidden.jpg/full/full/0/color.jpg");
+        tester.testAuthorizationWhenNotAuthorized(uri);
     }
 
     @Test
-    public void testBasicAuthentication() throws Exception {
-        final String username = "user";
-        final String secret = "secret";
-
-        Configuration config = ConfigurationFactory.getInstance();
-        try {
-            // To enable auth, the web server needs to be restarted.
-            // It will need to be restarted again to disable it.
-            config.setProperty(Key.BASIC_AUTH_ENABLED, true);
-            config.setProperty(Key.BASIC_AUTH_USERNAME, username);
-            config.setProperty(Key.BASIC_AUTH_SECRET, secret);
-            webServer.stop();
-            webServer.start();
-
-            // no credentials
-            ClientResource client = getClientForUriPath(
-                    "/" + IMAGE + "/full/full/0/default.jpg");
-            try {
-                client.get();
-                fail("Expected exception");
-            } catch (ResourceException e) {
-                assertEquals(Status.CLIENT_ERROR_UNAUTHORIZED, client.getStatus());
-            }
-
-            // invalid credentials
-            client.setChallengeResponse(
-                    new ChallengeResponse(ChallengeScheme.HTTP_BASIC, "invalid", "invalid"));
-            try {
-                client.get();
-                fail("Expected exception");
-            } catch (ResourceException e) {
-                assertEquals(Status.CLIENT_ERROR_UNAUTHORIZED, client.getStatus());
-            }
-
-            // valid credentials
-            client.setChallengeResponse(
-                    new ChallengeResponse(ChallengeScheme.HTTP_BASIC, username, secret));
-            client.get();
-            assertEquals(Status.SUCCESS_OK, client.getStatus());
-        } finally {
-            config.setProperty(Key.BASIC_AUTH_ENABLED, false);
-            webServer.stop();
-            webServer.start();
-        }
+    public void testGETAuthorizationWhenRedirecting() throws Exception {
+        URI uri = getHTTPURI("/redirect.jpg/full/full/0/color.jpg");
+        tester.testAuthorizationWhenRedirecting(uri);
     }
 
     @Test
-    public void testCacheHeadersWhenClientCachingIsEnabledAndResponseIsCacheable() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        config.setProperty(Key.CLIENT_CACHE_ENABLED, "true");
-        config.setProperty(Key.CLIENT_CACHE_MAX_AGE, "1234");
-        config.setProperty(Key.CLIENT_CACHE_SHARED_MAX_AGE, "4567");
-        config.setProperty(Key.CLIENT_CACHE_PUBLIC, "true");
-        config.setProperty(Key.CLIENT_CACHE_PRIVATE, "false");
-        config.setProperty(Key.CLIENT_CACHE_NO_CACHE, "false");
-        config.setProperty(Key.CLIENT_CACHE_NO_STORE, "false");
-        config.setProperty(Key.CLIENT_CACHE_MUST_REVALIDATE, "false");
-        config.setProperty(Key.CLIENT_CACHE_PROXY_REVALIDATE, "false");
-        config.setProperty(Key.CLIENT_CACHE_NO_TRANSFORM, "true");
-
-        Map<String, String> expectedDirectives = new HashMap<>();
-        expectedDirectives.put("max-age", "1234");
-        expectedDirectives.put("s-maxage", "4567");
-        expectedDirectives.put("public", null);
-        expectedDirectives.put("no-transform", null);
-
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.jpg");
-        client.get();
-        List<CacheDirective> actualDirectives = client.getResponse().getCacheDirectives();
-        for (CacheDirective d : actualDirectives) {
-            if (d.getName() != null) {
-                assertTrue(expectedDirectives.keySet().contains(d.getName()));
-                if (d.getValue() != null) {
-                    assertTrue(expectedDirectives.get(d.getName()).equals(d.getValue()));
-                } else {
-                    assertNull(expectedDirectives.get(d.getName()));
-                }
-            }
-        }
+    public void testGETBasicAuthenticationWithNoCredentials() throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testBasicAuthWithNoCredentials(appServer, uri);
     }
 
     @Test
-    public void testCacheHeadersWhenClientCachingIsEnabledAndResponseIsNotCacheable()
+    public void testGETBasicAuthenticationWithInvalidCredentials()
             throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        config.setProperty(Key.CLIENT_CACHE_ENABLED, "true");
-        config.setProperty(Key.CLIENT_CACHE_MAX_AGE, "1234");
-        config.setProperty(Key.CLIENT_CACHE_SHARED_MAX_AGE, "4567");
-        config.setProperty(Key.CLIENT_CACHE_PUBLIC, "true");
-        config.setProperty(Key.CLIENT_CACHE_PRIVATE, "false");
-        config.setProperty(Key.CLIENT_CACHE_NO_CACHE, "false");
-        config.setProperty(Key.CLIENT_CACHE_NO_STORE, "false");
-        config.setProperty(Key.CLIENT_CACHE_MUST_REVALIDATE, "false");
-        config.setProperty(Key.CLIENT_CACHE_PROXY_REVALIDATE, "false");
-        config.setProperty(Key.CLIENT_CACHE_NO_TRANSFORM, "true");
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testBasicAuthWithInvalidCredentials(appServer, uri);
+    }
 
-        ClientResource client = getClientForUriPath(
-                "/bogus/full/full/0/default.jpg");
-        try {
-            client.get();
-            fail("Expected exception");
-        } catch (ResourceException e) {
-            assertEquals(0, client.getResponseCacheDirectives().size());
-        }
+    @Test
+    public void testGETBasicAuthenticationWithValidCredentials()
+            throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testBasicAuthWithValidCredentials(appServer, uri);
+    }
+
+    @Test
+    public void testGETCacheHeadersWhenClientCachingIsEnabledAndResponseIsCacheable()
+            throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testCacheHeadersWhenClientCachingIsEnabledAndResponseIsCacheable(uri);
+    }
+
+    @Test
+    public void testGETCacheHeadersWhenClientCachingIsEnabledAndResponseIsNotCacheable()
+            throws Exception {
+        URI uri = getHTTPURI("/bogus/full/full/0/color.jpg");
+        tester.testCacheHeadersWhenClientCachingIsEnabledAndResponseIsNotCacheable(uri);
     }
 
     /**
      * Tests that there is no Cache-Control header returned when
-     * cache.client.enabled = true but a cache=false argument is present in the
-     * URL query.
-     *
-     * @throws Exception
+     * cache.client.enabled = true but a cache=false argument is present
+     * in the URL query.
      */
     @Test
-    public void testCacheHeadersWhenClientCachingIsEnabledButCachingIsDisabledInUrl()
+    public void testGETCacheHeadersWhenClientCachingIsEnabledButCachingIsDisabledInURL()
             throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        config.setProperty(Key.CLIENT_CACHE_ENABLED, "true");
-        config.setProperty(Key.CLIENT_CACHE_MAX_AGE, "1234");
-        config.setProperty(Key.CLIENT_CACHE_SHARED_MAX_AGE, "4567");
-        config.setProperty(Key.CLIENT_CACHE_PUBLIC, "true");
-        config.setProperty(Key.CLIENT_CACHE_PRIVATE, "false");
-        config.setProperty(Key.CLIENT_CACHE_NO_CACHE, "false");
-        config.setProperty(Key.CLIENT_CACHE_NO_STORE, "false");
-        config.setProperty(Key.CLIENT_CACHE_MUST_REVALIDATE, "false");
-        config.setProperty(Key.CLIENT_CACHE_PROXY_REVALIDATE, "false");
-        config.setProperty(Key.CLIENT_CACHE_NO_TRANSFORM, "true");
-
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.jpg?cache=false");
-        client.get();
-        assertEquals(0, client.getResponse().getCacheDirectives().size());
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg?cache=false");
+        tester.testCacheHeadersWhenClientCachingIsEnabledButCachingIsDisabledInURL(uri);
     }
 
     @Test
-    public void testCacheHeadersWhenClientCachingIsDisabled() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        config.setProperty(Key.CLIENT_CACHE_ENABLED, false);
-
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.jpg");
-        client.get();
-        assertEquals(0, client.getResponse().getCacheDirectives().size());
+    public void testGETCacheHeadersWhenClientCachingIsDisabled() throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testCacheHeadersWhenClientCachingIsDisabled(uri);
     }
 
     @Test
-    public void testCacheWhenDerviativeCachingIsEnabled() throws Exception {
-        File cacheFolder = TestUtil.getTempFolder();
-        cacheFolder = new File(cacheFolder.getAbsolutePath() + "/cache");
-        File imageCacheFolder = new File(cacheFolder.getAbsolutePath() + "/image");
-        if (cacheFolder.exists()) {
-            FileUtils.cleanDirectory(cacheFolder);
-        } else {
-            cacheFolder.mkdir();
-        }
-
-        Configuration config = Configuration.getInstance();
-        config.setProperty(Key.DERIVATIVE_CACHE_ENABLED, true);
-        config.setProperty(Key.DERIVATIVE_CACHE, "FilesystemCache");
-        config.setProperty(Key.FILESYSTEMCACHE_PATHNAME,
-                cacheFolder.getAbsolutePath());
-        config.setProperty(Key.CACHE_SERVER_TTL, 10);
-        config.setProperty(Key.CACHE_SERVER_RESOLVE_FIRST, true);
-
-        assertEquals(0, FileUtils.listFiles(cacheFolder, null, true).size());
-
-        // request an image to cache it
-        getClientForUriPath("/" + IMAGE + "/full/full/0/default.png").get();
-
-        // assert that it has been cached
-        assertEquals(1, FileUtils.listFiles(imageCacheFolder, null, true).size());
-    }
-
-    @Test
-    public void testCacheWhenDerviativeCachingIsEnabledButNegativeCacheQueryArgumentIsSupplied()
+    public void testGETCachingWhenCachesAreEnabledButNegativeCacheQueryArgumentIsSupplied()
             throws Exception {
-        File cacheFolder = TestUtil.getTempFolder();
-        cacheFolder = new File(cacheFolder.getAbsolutePath() + "/cache");
-        File imageCacheFolder = new File(cacheFolder.getAbsolutePath() + "/image");
-        if (cacheFolder.exists()) {
-            FileUtils.cleanDirectory(cacheFolder);
-        } else {
-            cacheFolder.mkdir();
-        }
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.png?cache=false");
+        tester.testCachingWhenCachesAreEnabledButNegativeCacheQueryArgumentIsSupplied(uri);
+    }
 
+    @Test
+    public void testGETCacheWithDerivativeCacheEnabledAndInfoCacheEnabledAndResolveFirstEnabled()
+            throws Exception {
+        // The image must be modified as unmodified images aren't cached.
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/1/color.jpg");
+        tester.testCacheWithDerivativeCacheEnabledAndInfoCacheEnabledAndResolveFirstEnabled(
+                uri, TestUtil.getImage(IMAGE));
+    }
+
+    @Test
+    public void testGETCacheWithDerivativeCacheEnabledAndInfoCacheEnabledAndResolveFirstDisabled()
+            throws Exception {
+        // The image must be modified as unmodified images aren't cached.
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/1/color.jpg");
+        tester.testCacheWithDerivativeCacheEnabledAndInfoCacheEnabledAndResolveFirstDisabled(
+                uri, TestUtil.getImage(IMAGE));
+    }
+
+    @Test
+    public void testGETCacheWithDerivativeCacheEnabledAndInfoCacheDisabledAndResolveFirstEnabled()
+            throws Exception {
+        // The image must be modified as unmodified images aren't cached.
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/1/color.jpg");
+        tester.testCacheWithDerivativeCacheEnabledAndInfoCacheDisabledAndResolveFirstEnabled(
+                uri, TestUtil.getImage(IMAGE));
+    }
+
+    @Test
+    public void testGETCacheWithDerivativeCacheEnabledAndInfoCacheDisabledAndResolveFirstDisabled()
+            throws Exception {
+        // The image must be modified as unmodified images aren't cached.
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/1/color.jpg");
+        tester.testCacheWithDerivativeCacheEnabledAndInfoCacheDisabledAndResolveFirstDisabled(
+                uri, TestUtil.getImage(IMAGE));
+    }
+
+    @Test
+    public void testGETCacheWithDerivativeCacheDisabledAndInfoCacheEnabledAndResolveFirstEnabled()
+            throws Exception {
+        // The image must be modified as unmodified images aren't cached.
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/1/color.jpg");
+        tester.testCacheWithDerivativeCacheDisabledAndInfoCacheEnabledAndResolveFirstEnabled(
+                uri, TestUtil.getImage(IMAGE));
+    }
+
+    @Test
+    public void testGETCacheWithDerivativeCacheDisabledAndInfoCacheEnabledAndResolveFirstDisabled()
+            throws Exception {
+        // The image must be modified as unmodified images aren't cached.
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/1/color.jpg");
+        tester.testCacheWithDerivativeCacheDisabledAndInfoCacheEnabledAndResolveFirstDisabled(
+                uri, TestUtil.getImage(IMAGE));
+    }
+
+    @Test
+    public void testGETCacheWithDerivativeCacheDisabledAndInfoCacheDisabledAndResolveFirstEnabled()
+            throws Exception {
+        // The image must be modified as unmodified images aren't cached.
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/1/color.jpg");
+        tester.testCacheWithDerivativeCacheDisabledAndInfoCacheDisabledAndResolveFirstEnabled(
+                uri, TestUtil.getImage(IMAGE));
+    }
+
+    @Test
+    public void testGETCacheWithDerivativeCacheDisabledAndInfoCacheDisabledAndResolveFirstDisabled()
+            throws Exception {
+        // The image must be modified as unmodified images aren't cached.
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/1/color.jpg");
+        tester.testCacheWithDerivativeCacheDisabledAndInfoCacheDisabledAndResolveFirstDisabled(
+                uri, TestUtil.getImage(IMAGE));
+    }
+
+    @Test
+    public void testGETContentDispositionHeaderWithNoHeader() throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testContentDispositionHeaderWithNoHeader(uri);
+    }
+
+    @Test
+    public void testGETContentDispositionHeaderSetToInline() throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testContentDispositionHeaderSetToInline(uri);
+    }
+
+    @Test
+    public void testGETContentDispositionHeaderSetToAttachment()
+            throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testContentDispositionHeaderSetToAttachment(uri);
+    }
+
+    @Test
+    public void testGETEndpointEnabled() {
         Configuration config = Configuration.getInstance();
-        config.setProperty(Key.DERIVATIVE_CACHE_ENABLED, true);
-        config.setProperty(Key.DERIVATIVE_CACHE, "FilesystemCache");
-        config.setProperty(Key.FILESYSTEMCACHE_PATHNAME,
-                cacheFolder.getAbsolutePath());
-        config.setProperty(Key.CACHE_SERVER_TTL, 10);
-        config.setProperty(Key.CACHE_SERVER_RESOLVE_FIRST, true);
+        config.setProperty(Key.IIIF_1_ENDPOINT_ENABLED, true);
 
-        assertEquals(0, FileUtils.listFiles(cacheFolder, null, true).size());
-
-        // request an image
-        getClientForUriPath("/" + IMAGE + "/full/full/0/default.png?cache=false").get();
-
-        // assert that it has NOT been cached
-        assertFalse(imageCacheFolder.exists());
+        assertStatus(200, getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg"));
     }
 
     @Test
-    public void testContentDispositionHeader() throws Exception {
-        // no header
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.jpg");
-        client.get();
-        assertNull(client.getResponseEntity().getDisposition());
+    public void testGETEndpointDisabled() {
+        Configuration config = Configuration.getInstance();
+        config.setProperty(Key.IIIF_2_ENDPOINT_ENABLED, false);
 
-        // inline
-        Configuration config = ConfigurationFactory.getInstance();
-        config.setProperty(Key.IIIF_CONTENT_DISPOSITION, "inline");
-        client.get();
-        assertEquals(Disposition.TYPE_INLINE,
-                client.getResponseEntity().getDisposition().getType());
-
-        // attachment
-        config.setProperty(Key.IIIF_CONTENT_DISPOSITION, "attachment");
-        client.get();
-        assertEquals(Disposition.TYPE_ATTACHMENT,
-                client.getResponseEntity().getDisposition().getType());
-        assertEquals(IMAGE + ".jpg",
-                client.getResponseEntity().getDisposition().getFilename());
+        assertStatus(403, getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg"));
     }
 
     @Test
-    public void testEndpointDisabled() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.jpg");
+    public void testGETHTTP2() throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testHTTP2(uri);
+    }
 
+    @Test
+    public void testGETHTTPS1_1() throws Exception {
+        URI uri = getHTTPSURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testHTTPS1_1(uri);
+    }
+
+    @Test
+    public void testGETHTTPS2() throws Exception {
+        assumeTrue(SystemUtils.isALPNAvailable());
+        URI uri = getHTTPSURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testHTTPS2(uri);
+    }
+
+    @Test
+    public void testGETLinkHeader() throws Exception {
+        client = newClient("/" + IMAGE + "/full/full/0/color.jpg");
+        Response response = client.send();
+
+        String value = response.getHeaders().getFirstValue("Link");
+        assertTrue(value.startsWith("<http://localhost"));
+    }
+
+    @Test
+    public void testGETLinkHeaderWithSlashSubstitution() throws Exception {
+        Configuration config = Configuration.getInstance();
+        config.setProperty(Key.SLASH_SUBSTITUTE, "CATS");
+
+        client = newClient("/subfolderCATSjpg/full/full/0/color.jpg");
+        Response response = client.send();
+
+        String value = response.getHeaders().getFirstValue("Link");
+        assertTrue(value.contains("subfolderCATSjpg"));
+    }
+
+    @Test
+    public void testGETLinkHeaderWithEncodedCharacters() throws Exception {
+        Configuration config = Configuration.getInstance();
+        config.setProperty(Key.SLASH_SUBSTITUTE, ":");
+
+        client = newClient("/subfolder%3Ajpg/full/full/0/color.jpg");
+        Response response = client.send();
+
+        String value = response.getHeaders().getFirstValue("Link");
+        assertTrue(value.contains("subfolder%3Ajpg"));
+    }
+
+    @Test
+    public void testGETLinkHeaderWithBaseURIOverride() throws Exception {
+        Configuration config = Configuration.getInstance();
+        config.setProperty(Key.BASE_URI, "http://example.org/");
+
+        client = newClient("/" + IMAGE + "/full/full/0/color.jpg");
+        Response response = client.send();
+
+        String value = response.getHeaders().getFirstValue("Link");
+        assertTrue(value.startsWith("<http://example.org/"));
+    }
+
+    @Test
+    public void testGETLinkHeaderWithProxyHeaders() throws Exception {
+        client = newClient("/" + IMAGE + "/full/full/0/color.jpg");
+        client.getHeaders().set("X-Forwarded-Proto", "HTTP");
+        client.getHeaders().set("X-Forwarded-Host", "example.org");
+        client.getHeaders().set("X-Forwarded-Port", "8080");
+        client.getHeaders().set("X-Forwarded-Path", "/cats");
+        Response response = client.send();
+
+        assertEquals("<http://example.org:8080/cats/iiif/2/jpg-rgb-64x56x8-baseline.jpg/full/full/0/color.jpg>;rel=\"canonical\"",
+                response.getHeaders().getFirstValue("Link"));
+    }
+
+    @Test
+    public void testGETLinkHeaderBaseURIOverridesProxyHeaders()
+            throws Exception {
+        Configuration config = Configuration.getInstance();
+        config.setProperty(Key.BASE_URI, "https://example.net/");
+
+        client = newClient("/" + IMAGE + "/full/full/0/color.jpg");
+        client.getHeaders().set("X-Forwarded-Proto", "HTTP");
+        client.getHeaders().set("X-Forwarded-Host", "example.org");
+        client.getHeaders().set("X-Forwarded-Port", "8080");
+        client.getHeaders().set("X-Forwarded-Path", "/cats");
+        Response response = client.send();
+
+        assertEquals("<https://example.net/iiif/2/jpg-rgb-64x56x8-baseline.jpg/full/full/0/color.jpg>;rel=\"canonical\"",
+                response.getHeaders().getFirstValue("Link"));
+    }
+
+    @Test
+    public void testGETMinPixels() {
+        URI uri = getHTTPURI("/" + IMAGE + "/0,0,0,0/full/0/color.png");
+        tester.testMinPixels(uri);
+    }
+
+    @Test
+    public void testGETLessThanMaxPixels() {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.png");
+        tester.testLessThanMaxPixels(uri);
+    }
+
+    @Test
+    public void testGETMoreThanMaxPixels() {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.png");
+        tester.testMoreThanMaxPixels(uri);
+    }
+
+    @Test
+    public void testGETMaxPixelsIgnoredWhenStreamingSource() {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testMaxPixelsIgnoredWhenStreamingSource(uri);
+    }
+
+    @Test
+    public void testGETNotFound() {
+        URI uri = getHTTPURI("/invalid/full/full/0/color.jpg");
+        tester.testNotFound(uri);
+    }
+
+    @Test
+    public void testGETProcessorValidationFailure() {
+        URI uri = getHTTPURI("/pdf-multipage.pdf/full/full/0/color.jpg?page=999999");
+        tester.testProcessorValidationFailure(uri);
+    }
+
+    @Test
+    public void testGETPurgeFromCacheWhenSourceIsMissingAndOptionIsFalse()
+            throws Exception {
+        final String imagePath = "/" + IMAGE + "/full/full/0/color.jpg";
+        final URI uri = getHTTPURI(imagePath);
+        final OperationList opList = Parameters.fromUri(imagePath).toOperationList();
+        tester.testPurgeFromCacheWhenSourceIsMissingAndOptionIsFalse(
+                uri, opList);
+    }
+
+    @Test
+    public void testGETPurgeFromCacheWhenSourceIsMissingAndOptionIsTrue()
+            throws Exception {
+        final String imagePath = "/" + IMAGE + "/full/full/0/color.jpg";
+        final URI uri = getHTTPURI(imagePath);
+        final OperationList opList = Parameters.fromUri(imagePath).toOperationList();
+        tester.testPurgeFromCacheWhenSourceIsMissingAndOptionIsTrue(
+                uri, opList);
+    }
+
+    @Test
+    public void testGETRecoveryFromDerivativeCacheNewDerivativeImageInputStreamException()
+            throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testRecoveryFromDerivativeCacheNewDerivativeImageInputStreamException(uri);
+    }
+
+    @Test
+    public void testGETRecoveryFromDerivativeCacheNewDerivativeImageOutputStreamException()
+            throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.png");
+        tester.testRecoveryFromDerivativeCacheNewDerivativeImageOutputStreamException(uri);
+    }
+
+    @Test
+    public void testGETResolverCheckAccessNotCalledWithSourceCacheHit()
+            throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testSourceCheckAccessNotCalledWithSourceCacheHit(new Identifier(IMAGE), uri);
+    }
+
+    @Test
+    public void testGETResolverGetSourceFormatNotCalledWithSourceCacheHit()
+            throws Exception {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.jpg");
+        tester.testSourceGetFormatNotCalledWithSourceCacheHit(new Identifier(IMAGE), uri);
+    }
+
+    /**
+     * Checks that the server responds with HTTP 500 when a non-FileSource is
+     * used with a non-StreamProcessor.
+     */
+    @Test
+    public void testGETResolverProcessorCompatibility() {
+        URI uri = getHTTPURI("/jp2/full/full/0/color.jpg");
+        tester.testSourceProcessorCompatibility(
+                uri, appServer.getHTTPHost(), appServer.getHTTPPort());
+    }
+
+    @Test
+    public void testGETNotRestrictedToSizes() {
+        Configuration config = Configuration.getInstance();
+        config.setProperty(Key.IIIF_2_RESTRICT_TO_SIZES, false);
+
+        assertStatus(200, getHTTPURI("/" + IMAGE + "/full/53,37/0/color.jpg"));
+    }
+
+    @Test
+    public void testGETRestrictedToSizes() {
+        Configuration config = Configuration.getInstance();
+        config.setProperty(Key.IIIF_2_RESTRICT_TO_SIZES, true);
+
+        assertStatus(403, getHTTPURI("/" + IMAGE + "/full/53,37/0/color.jpg"));
+    }
+
+    @Test
+    public void testGETSlashSubstitution() {
+        URI uri = getHTTPURI("/subfolderCATSjpg/full/full/0/color.jpg");
+        tester.testSlashSubstitution(uri);
+    }
+
+    @Test
+    public void testGETUnavailableSourceFormat() {
+        URI uri = getHTTPURI("/text.txt/full/full/0/color.jpg");
+        tester.testUnavailableSourceFormat(uri);
+    }
+
+    @Test
+    public void testGETInvalidOutputFormat() {
+        URI uri = getHTTPURI("/" + IMAGE + "/full/full/0/color.bogus");
+        tester.testInvalidOutputFormat(uri);
+    }
+
+    /**
+     * Tests the default response headers. Individual headers may be tested
+     * more thoroughly elsewhere.
+     */
+    @Test
+    public void testGETResponseHeaders() throws Exception {
+        client = newClient("/" + IMAGE + "/full/full/0/color.jpg");
+        Response response = client.send();
+        Headers headers = response.getHeaders();
+        assertEquals(7, headers.size());
+
+        // Content-Type
+        assertEquals("image/jpeg", headers.getFirstValue("Content-Type"));
+        // Date
+        assertNotNull(headers.getFirstValue("Date"));
+        // Link
+        assertTrue(headers.getFirstValue("Link").contains("://"));
+        // Server
+        assertTrue(headers.getFirstValue("Server").contains("Restlet"));
+        // Transfer-Encoding
+        assertEquals("chunked",
+                headers.getFirstValue("Transfer-Encoding"));
+        // Vary
+        List<String> parts =
+                Arrays.asList(StringUtils.split(headers.getFirstValue("Vary"), ", "));
+        assertEquals(5, parts.size());
+        assertTrue(parts.contains("Accept"));
+        assertTrue(parts.contains("Accept-Charset"));
+        assertTrue(parts.contains("Accept-Encoding"));
+        assertTrue(parts.contains("Accept-Language"));
+        assertTrue(parts.contains("Origin"));
+        // X-Powered-By
+        assertEquals(Application.getName() + "/" + Application.getVersion(),
+                headers.getFirstValue("X-Powered-By"));
+    }
+
+    @Test
+    public void testOPTIONSWhenEnabled() throws Exception {
+        Configuration config = Configuration.getInstance();
         config.setProperty(Key.IIIF_2_ENDPOINT_ENABLED, true);
-        client.get();
-        assertEquals(Status.SUCCESS_OK, client.getStatus());
 
+        client = newClient("/" + IMAGE + "/full/full/0/color.jpg");
+        client.setMethod(Method.OPTIONS);
+        Response response = client.send();
+        assertEquals(204, response.getStatus());
+
+        Headers headers = response.getHeaders();
+        List<String> methods = Arrays.asList(StringUtils.split(headers.getFirstValue("Allow"), ", "));
+        assertEquals(2, methods.size());
+        assertTrue(methods.contains("GET"));
+        assertTrue(methods.contains("OPTIONS"));
+    }
+
+    @Test
+    public void testOPTIONSWhenDisabled() throws Exception {
+        Configuration config = Configuration.getInstance();
         config.setProperty(Key.IIIF_2_ENDPOINT_ENABLED, false);
         try {
-            client.get();
+            client = newClient("/" + IMAGE + "/full/full/0/color.jpg");
+            client.setMethod(Method.OPTIONS);
+            client.send();
             fail("Expected exception");
         } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_FORBIDDEN, client.getStatus());
+            assertEquals(403, e.getStatusCode());
         }
-    }
-
-    @Test
-    public void testIsAuthorized() {
-        // TODO: write this
-    }
-
-    /**
-     * Tests that the Link header respects the <code>base_uri</code>
-     * key in the configuration.
-     */
-    @Test
-    public void testLinkHeader() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.jpg");
-
-        config.setProperty(Key.BASE_URI, "");
-        client.get();
-        Header header = client.getResponse().getHeaders().getFirst("Link");
-        assertTrue(header.getValue().startsWith("<http://localhost"));
-
-        config.setProperty(Key.BASE_URI, "https://example.org/");
-        client.get();
-        header = client.getResponse().getHeaders().getFirst("Link");
-        assertTrue(header.getValue().startsWith("<https://example.org/"));
-
-        client.getRequest().getHeaders().add("X-IIIF-ID", "originalID");
-        client.get();
-        header = client.getResponse().getHeaders().getFirst("Link");
-        assertTrue(header.getValue().contains("/originalID/"));
-    }
-
-    @Test
-    public void testMaxPixels() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.png");
-
-        config.setProperty(Key.MAX_PIXELS, 100000000);
-        client.get();
-        assertEquals(Status.SUCCESS_OK, client.getStatus());
-
-        config.setProperty(Key.MAX_PIXELS, 1000);
-        try {
-            client.get();
-            fail("Expected exception");
-        } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_FORBIDDEN, client.getStatus());
-        }
-    }
-
-    @Test
-    public void testMaxPixelsIgnoredWhenStreamingSource() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.jpg");
-        config.setProperty(Key.MAX_PIXELS, 1000);
-        client.get();
-        assertEquals(Status.SUCCESS_OK, client.getStatus());
-    }
-
-    @Test
-    public void testNotFound() throws Exception {
-        ClientResource client = getClientForUriPath("/invalid");
-        try {
-            client.get();
-            fail("Expected exception");
-        } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_NOT_FOUND, client.getStatus());
-        }
-    }
-
-    @Test
-    public void testProcessorValidationFailure() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        config.setProperty("processor.pdf", "PdfBoxProcessor");
-        ClientResource client = getClientForUriPath(
-                "/pdf-multipage.pdf/full/full/0/default.jpg?page=999999");
-        try {
-            client.get();
-        } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_BAD_REQUEST, client.getStatus());
-        }
-    }
-
-    @Test
-    public void testPurgeFromCacheWhenSourceIsMissingAndOptionIsFalse()
-            throws Exception {
-        doPurgeFromCacheWhenSourceIsMissing(false);
-    }
-
-    @Test
-    public void testPurgeFromCacheWhenSourceIsMissingAndOptionIsTrue()
-            throws Exception {
-        doPurgeFromCacheWhenSourceIsMissing(true);
-    }
-
-    private void doPurgeFromCacheWhenSourceIsMissing(boolean purgeMissing)
-            throws Exception {
-        // Create a directory that will contain a source image. Don't want to
-        // use the image fixtures dir because we'll need to delete one.
-        File sourceDir = TestUtil.getTempFolder();
-        sourceDir = new File(sourceDir.getAbsolutePath() + "/source");
-        if (sourceDir.exists()) {
-            FileUtils.cleanDirectory(sourceDir);
-        } else {
-            sourceDir.mkdir();
-        }
-
-        // Populate the source directory with an image.
-        File imageFixture = TestUtil.getImage(IMAGE);
-        File sourceImage = new File(sourceDir.getAbsolutePath() + "/" +
-                imageFixture.getName());
-        FileUtils.copyFile(imageFixture, sourceImage);
-
-        // Create the cache directory.
-        File cacheDir = TestUtil.getTempFolder();
-        cacheDir = new File(cacheDir.getAbsolutePath() + "/cache");
-        if (cacheDir.exists()) {
-            FileUtils.cleanDirectory(cacheDir);
-        } else {
-            cacheDir.mkdir();
-        }
-
-        final Configuration config = Configuration.getInstance();
-        config.setProperty(Key.FILESYSTEMRESOLVER_PATH_PREFIX,
-                sourceDir.getAbsolutePath() + "/");
-        config.setProperty(Key.DERIVATIVE_CACHE_ENABLED, true);
-        config.setProperty(Key.DERIVATIVE_CACHE, "FilesystemCache");
-        config.setProperty(Key.FILESYSTEMCACHE_PATHNAME,
-                cacheDir.getAbsolutePath());
-        config.setProperty(Key.CACHE_SERVER_TTL, 60);
-        config.setProperty(Key.CACHE_SERVER_RESOLVE_FIRST, true);
-        config.setProperty(Key.CACHE_SERVER_PURGE_MISSING, purgeMissing);
-
-        try {
-            final String imagePath = "/" + IMAGE + "/full/full/0/default.jpg";
-            final OperationList ops = Parameters.fromUri(imagePath).
-                    toOperationList();
-            ops.applyNonEndpointMutations(new Dimension(64, 56), "",
-                    new URL("http://example.org/"), new HashMap<>(),
-                    new HashMap<>());
-
-            assertEquals(0, FileUtils.listFiles(cacheDir, null, true).size());
-
-            // request an image to cache it
-            getClientForUriPath(imagePath).get();
-            getClientForUriPath("/" + IMAGE + "/info.json").get();
-
-            // assert that it has been cached (there should be both an image
-            // and an info)
-            assertEquals(2, FileUtils.listFiles(cacheDir, null, true).size());
-
-            // Delete the source image.
-            sourceImage.delete();
-
-            // request the same image which is now cached but underlying is 404
-            try {
-                getClientForUriPath("/" + IMAGE + "/full/full/0/default.jpg").get();
-                fail("Expected exception");
-            } catch (ResourceException e) {
-                // noop
-            }
-
-            if (purgeMissing) {
-                assertEquals(0, FileUtils.listFiles(cacheDir, null, true).size());
-            } else {
-                assertEquals(2, FileUtils.listFiles(cacheDir, null, true).size());
-            }
-        } finally {
-            FileUtils.deleteDirectory(sourceDir);
-            FileUtils.deleteDirectory(cacheDir);
-        }
-    }
-
-    @Test
-    public void testGetRepresentationDisposition() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-
-        final Identifier identifier = new Identifier("cats?/\\dogs");
-        final Format outputFormat = Format.JPG;
-
-        // test with undefined config key
-        Disposition disposition = AbstractResource.
-                getRepresentationDisposition(identifier, outputFormat);
-        assertEquals(Disposition.TYPE_NONE, disposition.getType());
-
-        // test with empty config key
-        config.setProperty(Key.IIIF_CONTENT_DISPOSITION, "");
-        disposition = AbstractResource.
-                getRepresentationDisposition(identifier, outputFormat);
-        assertEquals(Disposition.TYPE_NONE, disposition.getType());
-
-        // test with config key set to "inline"
-        config.setProperty(Key.IIIF_CONTENT_DISPOSITION, "inline");
-        disposition = AbstractResource.
-                getRepresentationDisposition(identifier, outputFormat);
-        assertEquals(Disposition.TYPE_INLINE, disposition.getType());
-
-        // test with config key set to "attachment"
-        config.setProperty(Key.IIIF_CONTENT_DISPOSITION, "attachment");
-        disposition = AbstractResource.
-                getRepresentationDisposition(identifier, outputFormat);
-        assertEquals(Disposition.TYPE_ATTACHMENT, disposition.getType());
-        assertEquals("cats___dogs.jpg", disposition.getFilename());
-    }
-
-    /**
-     * Checks that the server responds with HTTP 500 when a non-FileResolver is
-     * used with a non-StreamProcessor.
-     *
-     * @throws Exception
-     */
-    @Test
-    public void testResolverProcessorCompatibility() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        config.setProperty(Key.RESOLVER_STATIC, "HttpResolver");
-        config.setProperty(Key.HTTPRESOLVER_LOOKUP_STRATEGY,
-                "BasicLookupStrategy");
-        config.setProperty(Key.HTTPRESOLVER_URL_PREFIX,
-                webServer.getHTTPHost() + ":" + webServer.getHTTPPort() + "/");
-        config.setProperty("processor.jp2", "KakaduProcessor");
-        config.setProperty(Key.PROCESSOR_FALLBACK, "KakaduProcessor");
-
-        ClientResource client = getClientForUriPath("/jp2/full/full/0/default.jpg");
-        try {
-            client.get();
-            fail("Expected exception");
-        } catch (ResourceException e) {
-            assertEquals(Status.SERVER_ERROR_INTERNAL, e.getStatus());
-        }
-    }
-
-    @Test
-    public void testRestrictToSizes() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-
-        // not restricted
-        config.setProperty(Key.IIIF_2_RESTRICT_TO_SIZES, false);
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/53,37/0/default.jpg");
-
-        client.get();
-        assertEquals(Status.SUCCESS_OK, client.getResponse().getStatus());
-
-        // restricted
-        config.setProperty(Key.IIIF_2_RESTRICT_TO_SIZES, true);
-        client = getClientForUriPath("/" + IMAGE + "/full/53,37/0/default.jpg");
-        try {
-            client.get();
-            fail();
-        } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_FORBIDDEN, e.getStatus());
-        }
-    }
-
-    @Test
-    public void testSlashSubstitution() throws Exception {
-        ConfigurationFactory.getInstance().setProperty("slash_substitute", "CATS");
-
-        ClientResource client = getClientForUriPath("/subfolderCATSjpg/full/full/0/default.jpg");
-        client.get();
-        assertEquals(Status.SUCCESS_OK, client.getResponse().getStatus());
-    }
-
-    @Test
-    public void testUnavailableSourceFormat() throws Exception {
-        ClientResource client = getClientForUriPath("/text.txt/full/full/0/default.jpg");
-        try {
-            client.get();
-            fail("Expected exception");
-        } catch (ResourceException e) {
-            assertEquals(Status.SERVER_ERROR_INTERNAL, client.getStatus());
-        }
-    }
-
-    @Test
-    public void testInvalidOutputFormat() throws Exception {
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.bogus");
-        try {
-            client.get();
-            fail("Expected exception");
-        } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_BAD_REQUEST, client.getStatus());
-        }
-    }
-
-    @Test
-    public void testUnavailableOutputFormat() throws Exception {
-        ClientResource client = getClientForUriPath(
-                "/" + IMAGE + "/full/full/0/default.webp");
-        try {
-            client.get();
-            fail("Expected exception");
-        } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_UNSUPPORTED_MEDIA_TYPE,
-                    client.getStatus());
-        }
-    }
-
-    /**
-     * Tests that an X-Sendfile header is added to the response when
-     * FilesystemCache registers a hit, and not added otherwise.
-     */
-    @Test
-    public void testXSendfileHeaderIsSentWhenAllConditionsAreMet()
-            throws Exception {
-        File cacheFolder = TestUtil.getTempFolder();
-        cacheFolder = new File(cacheFolder.getAbsolutePath() + "/cache");
-        if (cacheFolder.exists()) {
-            FileUtils.cleanDirectory(cacheFolder);
-        } else {
-            cacheFolder.mkdir();
-        }
-
-        final Configuration config = Configuration.getInstance();
-
-        // Set up the cache. We must use FilesystemCache because X-Sendfile
-        // will work only with that.
-        config.setProperty(Key.DERIVATIVE_CACHE_ENABLED, true);
-        config.setProperty(Key.DERIVATIVE_CACHE, "FilesystemCache");
-        config.setProperty(Key.FILESYSTEMCACHE_PATHNAME,
-                cacheFolder.getAbsolutePath());
-        config.setProperty(Key.CACHE_SERVER_TTL, 10);
-
-        // Request an image. Since it hasn't yet been cached, the response
-        // shouldn't include the X-Sendfile header.
-        ClientResource resource =
-                getClientForUriPath("/" + IMAGE + "/full/full/0/default.png");
-        resource.getRequest().getHeaders().add("X-Sendfile-Type", "X-Sendfile");
-        resource.get();
-        Header header = resource.getResponse().getHeaders().getFirst("X-Sendfile");
-        assertNull(header);
-
-        // Now it should be cached, so the next response should include the
-        // X-Sendfile header.
-        resource.get();
-        header = resource.getResponse().getHeaders().getFirst("X-Sendfile");
-
-        // /image/08/34/25/083425bc68eece64753ec83a25f87230_540586ed73955b63fd3c8d510a32fcac.png
-        assertTrue(header.getValue().matches("^\\/image\\/[0-9a-f_/]*\\.png"));
-    }
-
-    @Test
-    public void testXSendfileHeaderIsNotSentWhenXSendfileTypeIsNotSupplied()
-            throws Exception {
-        File cacheFolder = TestUtil.getTempFolder();
-        cacheFolder = new File(cacheFolder.getAbsolutePath() + "/cache");
-        if (cacheFolder.exists()) {
-            FileUtils.cleanDirectory(cacheFolder);
-        } else {
-            cacheFolder.mkdir();
-        }
-
-        final Configuration config = Configuration.getInstance();
-
-        // Set up the cache. We must use FilesystemCache because X-Sendfile
-        // will work only with that.
-        config.setProperty(Key.DERIVATIVE_CACHE_ENABLED, true);
-        config.setProperty(Key.DERIVATIVE_CACHE, "FilesystemCache");
-        config.setProperty(Key.FILESYSTEMCACHE_PATHNAME,
-                cacheFolder.getAbsolutePath());
-        config.setProperty(Key.CACHE_SERVER_TTL, 10);
-
-        // Request an image. Since it hasn't yet been cached, the response
-        // shouldn't include the X-Sendfile header.
-        ClientResource resource =
-                getClientForUriPath("/" + IMAGE + "/full/full/0/default.png");
-        resource.get();
-        Header header = resource.getResponse().getHeaders().getFirst("X-Sendfile");
-        assertNull(header);
-
-        // Since the header is disabled, the next response shouldn't include it,
-        // either.
-        resource.get();
-        header = resource.getResponse().getHeaders().getFirst("X-Sendfile");
-        assertNull(header);
     }
 
 }

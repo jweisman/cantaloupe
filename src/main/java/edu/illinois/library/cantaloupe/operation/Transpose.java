@@ -1,6 +1,7 @@
 package edu.illinois.library.cantaloupe.operation;
 
 import java.awt.Dimension;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -13,6 +14,14 @@ public enum Transpose implements Operation {
     HORIZONTAL,
     /** Indicates flipping. */
     VERTICAL;
+
+    /**
+     * Does nothing.
+     */
+    @Override
+    public void freeze() {
+        // no-op
+    }
 
     @Override
     public Dimension getResultingSize(Dimension fullSize) {
@@ -39,7 +48,7 @@ public enum Transpose implements Operation {
         final Map<String,Object> map = new HashMap<>();
         map.put("class", getClass().getSimpleName());
         map.put("axis", this.name().toLowerCase());
-        return map;
+        return Collections.unmodifiableMap(map);
     }
 
     /**

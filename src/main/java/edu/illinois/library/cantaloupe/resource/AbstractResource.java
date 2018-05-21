@@ -1,35 +1,33 @@
 package edu.illinois.library.cantaloupe.resource;
 
 import edu.illinois.library.cantaloupe.Application;
-import edu.illinois.library.cantaloupe.cache.CacheException;
-import edu.illinois.library.cantaloupe.cache.CacheFactory;
-import edu.illinois.library.cantaloupe.cache.DerivativeCache;
+import edu.illinois.library.cantaloupe.auth.AuthInfo;
+import edu.illinois.library.cantaloupe.auth.Authorizer;
+import edu.illinois.library.cantaloupe.auth.RedirectInfo;
+import edu.illinois.library.cantaloupe.cache.CacheFacade;
 import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Info;
 import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.image.Identifier;
-import edu.illinois.library.cantaloupe.operation.OperationList;
 import edu.illinois.library.cantaloupe.processor.Processor;
-import edu.illinois.library.cantaloupe.processor.ProcessorException;
-import edu.illinois.library.cantaloupe.script.DelegateScriptDisabledException;
-import edu.illinois.library.cantaloupe.script.ScriptEngine;
-import edu.illinois.library.cantaloupe.script.ScriptEngineFactory;
-import edu.illinois.library.cantaloupe.util.Stopwatch;
+import edu.illinois.library.cantaloupe.script.DelegateProxy;
+import edu.illinois.library.cantaloupe.script.DelegateProxyService;
+import edu.illinois.library.cantaloupe.script.DisabledException;
+import edu.illinois.library.cantaloupe.util.StringUtil;
 import org.apache.commons.lang3.StringUtils;
 import org.restlet.Request;
 import org.restlet.data.CacheDirective;
 import org.restlet.data.Disposition;
 import org.restlet.data.Header;
-import org.restlet.data.MediaType;
 import org.restlet.data.Parameter;
 import org.restlet.data.Protocol;
 import org.restlet.data.Reference;
 import org.restlet.data.Status;
-import org.restlet.ext.velocity.TemplateRepresentation;
 import org.restlet.representation.EmptyRepresentation;
 import org.restlet.representation.Representation;
 import org.restlet.representation.StringRepresentation;
+import org.restlet.resource.Options;
 import org.restlet.resource.ResourceException;
 import org.restlet.resource.ServerResource;
 import org.restlet.util.Series;
@@ -37,23 +35,51 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.script.ScriptException;
-import java.awt.Dimension;
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
+/**
+ * N.B.: If subclasses need to send custom response headers, they should add
+ * them to the {@link Series} returned by {@link #getBufferedResponseHeaders}.
+ */
 public abstract class AbstractResource extends ServerResource {
 
-    private static Logger logger = LoggerFactory.
-            getLogger(AbstractResource.class);
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(AbstractResource.class);
 
-    private static final String AUTHORIZATION_DELEGATE_METHOD = "authorized?";
-    private static final String FILENAME_CHARACTERS = "[^A-Za-z0-9._-]";
+    /**
+     * Replaces {@link #PUBLIC_IDENTIFIER_HEADER_DEPRECATED}.
+     */
+    public static final String PUBLIC_IDENTIFIER_HEADER = "X-Forwarded-ID";
 
-    private static final TemplateCache templateCache = new TemplateCache();
+    /**
+     * @deprecated Since version 4.0. Still respected, but superseded by
+     *             {@link #PUBLIC_IDENTIFIER_HEADER}.
+     */
+    @Deprecated
+    public static final String PUBLIC_IDENTIFIER_HEADER_DEPRECATED = "X-IIIF-ID";
+
+    protected static final String RESPONSE_CONTENT_DISPOSITION_QUERY_ARG =
+            "response-content-disposition";
+
+    private final Series<Header> bufferedResponseHeaders =
+            new Series<>(Header.class);
+
+    /**
+     * Set by {@link #getDelegateProxy()}.
+     */
+    private DelegateProxy delegateProxy;
+
+    private final RequestContext requestContext = new RequestContext();
 
     /**
      * @return Map of template variables common to most or all views, such as
@@ -63,7 +89,9 @@ public abstract class AbstractResource extends ServerResource {
         Map<String,Object> vars = new HashMap<>();
         vars.put("version", Application.getVersion());
         if (request != null) { // this will be null when testing
-            Reference publicRef = getPublicRootRef(request.getRootRef(),
+            Reference publicRef = getPublicReference(
+                    request.getRootRef(),
+                    request.getRootRef(),
                     request.getHeaders());
             vars.put("baseUri", publicRef.toString());
         }
@@ -71,43 +99,57 @@ public abstract class AbstractResource extends ServerResource {
     }
 
     /**
-     * <p>Returns a root reference (URI) that can be used in public for the
-     * purposes of display or internal linking.</p>
+     * <p>Returns a root reference (URI) that can be used in public for display
+     * or internal linking.</p>
      *
-     * <p>The URI respects {@link Key#BASE_URI}, if set. Otherwise, it
-     * respects the <code>X-Forwarded-*</code> request headers, if available.
-     * Finally, the server hostname etc. otherwise.</p>
+     * <p>The URI respects {@link Key#BASE_URI}, if set. Otherwise, it respects
+     * the {@literal X-Forwarded-*} request headers, if available. Finally, the
+     * server hostname etc. otherwise.</p>
      *
-     * @param requestRootRef
-     * @param requestHeaders
-     * @return Root reference usable in public.
+     * @param requestRootRef Application root URI.
+     * @param requestRef     Request URI.
+     * @param requestHeaders Request headers.
+     * @return Reference usable in public.
      */
-    protected static Reference getPublicRootRef(Reference requestRootRef,
-                                                Series<Header> requestHeaders) {
-        if (requestHeaders == null) {
-            requestHeaders = new Series<>(Header.class);
+    protected static Reference getPublicReference(Reference requestRootRef,
+                                                  Reference requestRef,
+                                                  Series<Header> requestHeaders) {
+        String appRootRelativePath =
+                requestRef.getRelativeRef(requestRootRef).getPath();
+        if (".".equals(appRootRelativePath)) { // when the paths are the same
+            appRootRelativePath = "";
         }
-        final Reference rootRef = new Reference(requestRootRef);
+        Reference newRef;
 
         // If base_uri is set in the configuration, build a URI based on that.
         final String baseUri = Configuration.getInstance().
                 getString(Key.BASE_URI);
         if (baseUri != null && baseUri.length() > 0) {
             final Reference baseRef = new Reference(baseUri);
-            rootRef.setScheme(baseRef.getScheme());
-            rootRef.setHostDomain(baseRef.getHostDomain());
+            newRef = new Reference(requestRootRef);
+            newRef.setScheme(baseRef.getScheme());
+            newRef.setHostDomain(baseRef.getHostDomain());
             // if the "port" is a local socket, Reference will serialize it
             // as -1, so avoid that.
             if (baseRef.getHostPort() < 0) {
-                rootRef.setHostPort(null);
+                newRef.setHostPort(null);
             } else {
-                rootRef.setHostPort(baseRef.getHostPort());
+                newRef.setHostPort(baseRef.getHostPort());
             }
-            rootRef.setPath(StringUtils.stripEnd(baseRef.getPath(), "/"));
+            String pathStr = StringUtils.stripEnd(baseRef.getPath(), "/");
+            if (!appRootRelativePath.isEmpty()) {
+                pathStr = StringUtils.stripEnd(pathStr, "/") + "/" +
+                        StringUtils.stripStart(appRootRelativePath, "/");
+            }
+            newRef.setPath(pathStr);
 
-            logger.debug("Base URI from assembled from configuration ({}): {}",
-                    Key.BASE_URI, rootRef);
+            LOGGER.debug("Base URI from assembled from {} key: {}",
+                    Key.BASE_URI, newRef);
+
         } else {
+            if (requestHeaders == null) {
+                requestHeaders = new Series<>(Header.class);
+            }
             // Try to use X-Forwarded-* headers.
             // N.B. Header values here may be comma-separated lists when
             // operating behind a chain of reverse proxies.
@@ -121,7 +163,7 @@ public abstract class AbstractResource extends ServerResource {
                 final String pathHeader = requestHeaders.getFirstValue(
                         "X-Forwarded-Path", true, "");
 
-                logger.debug("X-Forwarded headers: Proto: {}; Host: {}; " +
+                LOGGER.debug("X-Forwarded headers: Proto: {}; Host: {}; " +
                                 "Port: {}; Path: {}",
                         protocolHeader, hostHeader, portHeader, pathHeader);
 
@@ -130,7 +172,6 @@ public abstract class AbstractResource extends ServerResource {
                         protocolHeader.split(",")[0].trim().toUpperCase();
                 final Protocol protocol = protocolStr.equals("HTTPS") ?
                         Protocol.HTTPS : Protocol.HTTP;
-                final String pathStr = pathHeader.split(",")[0].trim();
                 final String portStr = portHeader.split(",")[0].trim();
                 Integer port = Integer.parseInt(portStr);
                 if ((port == 80 && protocol.equals(Protocol.HTTP)) ||
@@ -138,212 +179,147 @@ public abstract class AbstractResource extends ServerResource {
                     port = null;
                 }
 
-                rootRef.setHostDomain(hostStr);
-                rootRef.setPath(StringUtils.stripEnd(pathStr, "/"));
-                rootRef.setProtocol(protocol);
-                rootRef.setHostPort(port);
+                String pathStr = pathHeader.split(",")[0].trim();
+                if (!appRootRelativePath.isEmpty()) {
+                    pathStr = StringUtils.stripEnd(pathStr, "/") + "/" +
+                            StringUtils.stripStart(appRootRelativePath, "/");
+                }
 
-                logger.debug("Base URI assembled from X-Forwarded headers: {}",
-                                rootRef);
+                newRef = new Reference(requestRootRef);
+                newRef.setPath(pathStr);
+                newRef.setHostDomain(hostStr);
+                newRef.setPath(StringUtils.stripEnd(pathStr, "/"));
+                newRef.setProtocol(protocol);
+                newRef.setHostPort(port);
+
+                LOGGER.debug("Base URI assembled from X-Forwarded headers: {}",
+                                newRef);
             } else {
-                logger.debug("Base URI assembled from request: {}", rootRef);
+                newRef = requestRef;
+                LOGGER.debug("Base URI assembled from request: {}", newRef);
             }
         }
-        return rootRef;
-    }
-
-    /**
-     * @param identifier
-     * @param outputFormat
-     * @return Content disposition based on the setting of
-     *         {@link Key#IIIF_CONTENT_DISPOSITION} in the application
-     *         configuration. If it is set to <code>attachment</code>, the
-     *         disposition will have a filename set to a reasonable value
-     *         based on the given identifier and output format.
-     */
-    public static Disposition getRepresentationDisposition(
-            Identifier identifier, Format outputFormat) {
-        Disposition disposition = new Disposition();
-        switch (Configuration.getInstance().
-                getString(Key.IIIF_CONTENT_DISPOSITION, "none")) {
-            case "inline":
-                disposition.setType(Disposition.TYPE_INLINE);
-                break;
-            case "attachment":
-                disposition.setType(Disposition.TYPE_ATTACHMENT);
-                disposition.setFilename(
-                        identifier.toString().replaceAll(
-                                FILENAME_CHARACTERS, "_") +
-                                "." + outputFormat.getPreferredExtension());
-                break;
-        }
-        return disposition;
+        return newRef;
     }
 
     @Override
     protected void doInit() throws ResourceException {
         super.doInit();
+
+        // We don't honor the Range header as most responses will be streamed.
+        getResponse().getServerInfo().setAcceptingRanges(false);
+
+        // "Dimensions" are added to the Vary header. Restlet doesn't supply
+        // Origin by default, but it's needed.
+        // See: https://github.com/medusa-project/cantaloupe/issues/107
+        getResponse().getDimensions().addAll(Arrays.asList(
+                org.restlet.data.Dimension.CHARACTER_SET,
+                org.restlet.data.Dimension.ENCODING,
+                org.restlet.data.Dimension.LANGUAGE,
+                org.restlet.data.Dimension.ORIGIN));
         getResponse().getHeaders().add("X-Powered-By",
-                "Cantaloupe/" + Application.getVersion());
-        logger.info("doInit(): handling {} {}", getMethod(), getReference());
+                Application.getName() + "/" + Application.getVersion());
+
+        if (DelegateProxyService.isEnabled()) {
+            requestContext.setRequestURI(getReference().toUri());
+            requestContext.setRequestHeaders(getRequest().getHeaders().getValuesMap());
+            requestContext.setClientIP(getCanonicalClientIPAddress());
+            requestContext.setCookies(getRequest().getCookies().getValuesMap());
+            requestContext.setIdentifier(getIdentifier());
+        }
+
+        String headersStr = getRequest().getHeaders().stream()
+                .map(h -> h.getName() + ": " +
+                        ("Authorization".equals(h.getName()) ? "******" : h.getValue()))
+                .collect(Collectors.joining("; "));
+        LOGGER.info("doInit(): handling {} {} [{}]",
+                getMethod(), getReference(), headersStr);
     }
 
     /**
-     * Adds an X-Sendfile (or equivalent) header to the response, if the
-     * <code>X-Sendfile-Type</code> request header is set.
-     *
-     * @param relativePathname Relative pathname of the file.
+     * Enables HTTP OPTIONS requests. Restlet will set the {@literal Allow}
+     * header automatically.
      */
-    protected void addXSendfileHeader(String relativePathname) {
-        // Check the input.
-        if (relativePathname == null || relativePathname.length() < 1) {
-            logger.error("addXSendfileHeader(): relative pathname not " +
-                    "provided (this may be a bug)");
-            return;
-        }
+    @SuppressWarnings("unused")
+    @Options
+    public Representation doOptions() {
+        return new EmptyRepresentation();
+    }
 
-        // If there is an X-Sendfile-Type request header, set the X-Sendfile
-        // (or equivalent) response header.
-        final Header typeHeader =
-                getRequest().getHeaders().getFirst("X-Sendfile-Type");
-        if (typeHeader != null) {
-            getResponse().getHeaders().add(typeHeader.getValue(),
-                    relativePathname);
-        } else {
-            logger.debug("No X-Sendfile-Type request header. " +
-                    "X-Sendfile will be disabled.");
+    /**
+     * Uses an {@link Authorizer} to determine whether the request is
+     * authorized.
+     */
+    protected final void checkAuthorization()
+            throws ScriptException, AccessDeniedException {
+        final Authorizer authorizer = new Authorizer(getDelegateProxy());
+        final AuthInfo info = authorizer.authorize();
+
+        if (!info.isAuthorized()) {
+            throw new AccessDeniedException();
         }
     }
 
     /**
-     * <p>Invokes the {@link #AUTHORIZATION_DELEGATE_METHOD} delegate method to
-     * determine whether the request is authorized.</p>
+     * Uses an {@link Authorizer} to determine whether the request needs to be
+     * redirected.
      *
-     * <p>The delegate method may return a boolean or a hash. If it returns
-     * <code>true</code>, the request is authorized. If it returns
-     * <code>false</code>, an {@link AccessDeniedException} will be thrown.</p>
-     *
-     * <p>If it returns a hash, the hash must contain <code>location</code>,
-     * <code>status_code</code>, and <code>status_line</code> keys.</p>
-     *
-     * <p>N.B. The reason there aren't separate delegate methods to perform
-     * authorization and redirecting is because these will often require
-     * similar or identical service requests on the part of the client. Having
-     * one method handle both scenarios simplifies implementation and reduces
-     * cost.</p>
-     *
-     * @param opList Operations requested on the image.
-     * @param fullSize Full size of the requested image.
-     * @return <code>null</code> if the request is authorized. Otherwise, a
-     *         redirecting representation.
-     * @throws IOException
-     * @throws ScriptException
-     * @throws AccessDeniedException If the delegate method returns
-     *                               <code>false</code>.
+     * @return {@literal null} if the request does not need to be redirected.
+     *         Otherwise, a redirecting representation.
      */
-    protected final StringRepresentation checkAuthorization(
-            final OperationList opList, final Dimension fullSize)
-            throws IOException, ScriptException, AccessDeniedException {
-        final Map<String,Integer> fullSizeArg = new HashMap<>();
-        fullSizeArg.put("width", fullSize.width);
-        fullSizeArg.put("height", fullSize.height);
+    protected final StringRepresentation checkRedirect()
+            throws ScriptException {
+        final Authorizer authorizer = new Authorizer(getDelegateProxy());
+        final RedirectInfo info = authorizer.redirect();
 
-        final Dimension resultingSize = opList.getResultingSize(fullSize);
-        final Map<String,Integer> resultingSizeArg = new HashMap<>();
-        resultingSizeArg.put("width", resultingSize.width);
-        resultingSizeArg.put("height", resultingSize.height);
-
-        final Map opListMap = opList.toMap(fullSize);
-
-        try {
-            final ScriptEngine engine = ScriptEngineFactory.getScriptEngine();
-            Object result = engine.invoke(AUTHORIZATION_DELEGATE_METHOD,
-                    opList.getIdentifier().toString(),         // identifier
-                    fullSizeArg,                               // full_size
-                    opListMap.get("operations"),               // operations
-                    resultingSizeArg,                          // resulting_size
-                    opListMap.get("output_format"),            // output_format
-                    getReference().toString(),                 // request_uri
-                    getRequest().getHeaders().getValuesMap(),  // request_headers
-                    getCanonicalClientIpAddress(),             // client_ip
-                    getRequest().getCookies().getValuesMap()); // cookies
-            if (result instanceof Boolean) {
-                if (!((boolean) result)) {
-                    throw new AccessDeniedException();
-                }
-            } else {
-                final Map redirectInfo = (Map) result;
-                final String location = redirectInfo.get("location").toString();
-                // Prevent circular redirects
-                if (!getReference().toString().equals(location)) {
-                    final int statusCode =
-                            Integer.parseInt(redirectInfo.get("status_code").toString());
-                    if (statusCode < 300 || statusCode > 399) {
-                        throw new IllegalArgumentException(
-                                "Status code must be in the range of 300-399.");
-                    }
-
-                    logger.info("checkAuthorization(): redirecting to {} via HTTP {}",
-                            location, statusCode);
-                    final Status status = Status.valueOf(statusCode);
-                    final StringRepresentation rep =
-                            new StringRepresentation("Redirect: " + status.getUri());
-                    getResponse().setLocationRef(location);
-                    getResponse().setStatus(status);
-                    return rep;
-                }
-            }
-        } catch (DelegateScriptDisabledException e) {
-            logger.debug("checkAuthorization(): delegate script is disabled; allowing.");
-            return null;
+        if (info != null) {
+            final URI location = info.getRedirectURI();
+            final int code = info.getRedirectStatus();
+            LOGGER.info("checkAuthorization(): redirecting to {} via HTTP {}",
+                    location, code);
+            final Status status = Status.valueOf(code);
+            final StringRepresentation rep =
+                    new StringRepresentation("Redirect: " + location);
+            getResponse().setLocationRef(location.toString());
+            getResponse().setStatus(status);
+            return rep;
         }
         return null;
     }
 
-    /**
-     * Checks the given operation list against the given image size.
-     *
-     * @param opList
-     * @param fullSize
-     * @throws EmptyPayloadException
-     */
-    protected final void checkRequest(final OperationList opList,
-                                      final Dimension fullSize)
-            throws EmptyPayloadException {
-        final Dimension resultingSize = opList.getResultingSize(fullSize);
-        if (resultingSize.width < 1 || resultingSize.height < 1) {
-            throw new EmptyPayloadException();
-        }
+    protected void commitCustomResponseHeaders() {
+        getResponse().getHeaders().addAll(getBufferedResponseHeaders());
+        getResponseCacheDirectives().addAll(getCacheDirectives());
     }
 
     /**
-     * Some web servers have issues dealing with encoded slashes (%2F) in URLs.
-     * This method enables the use of an alternate string to represent a slash
-     * via {@link Key#SLASH_SUBSTITUTE}.
+     * Some web servers have issues dealing with encoded slashes ({@literal
+     * %2F}) in URIs. This method enables the use of an alternate string to
+     * represent a slash via {@link Key#SLASH_SUBSTITUTE}.
      *
      * @param uriPathComponent Path component (a part of the path before,
      *                         after, or between slashes)
-     * @return Path component with slashes decoded
+     * @return Path component with slashes decoded.
      */
-    protected final String decodeSlashes(final String uriPathComponent) {
+    private String decodeSlashes(final String uriPathComponent) {
         final String substitute = Configuration.getInstance().
                 getString(Key.SLASH_SUBSTITUTE, "");
-        if (substitute.length() > 0) {
+        if (!substitute.isEmpty()) {
             return StringUtils.replace(uriPathComponent, substitute, "/");
         }
         return uriPathComponent;
     }
 
-    protected final Identifier decodeSlashes(final Identifier identifier) {
-        return new Identifier(decodeSlashes(identifier.toString()));
+    protected Series<Header> getBufferedResponseHeaders() {
+        return bufferedResponseHeaders;
     }
 
     /**
      * @return List of cache directives according to the configuration, or an
-     *         empty list if {@link #isBypassingCache()} returns
-     *         <code>false</code>.
+     *         empty list if {@link #isBypassingCache()} returns {@literal
+     *         false}.
      */
-    protected final List<CacheDirective> getCacheDirectives() {
+    private List<CacheDirective> getCacheDirectives() {
         final List<CacheDirective> directives = new ArrayList<>();
         if (isBypassingCache()) {
             return directives;
@@ -384,7 +360,7 @@ public abstract class AbstractResource extends ServerResource {
                 }
             }
         } catch (NoSuchElementException e) {
-            logger.warn("Cache-Control headers are invalid: {}",
+            LOGGER.warn("Cache-Control headers are invalid: {}",
                     e.getMessage());
         }
         return directives;
@@ -392,9 +368,9 @@ public abstract class AbstractResource extends ServerResource {
 
     /**
      * @return Best guess at the user agent's IP address, respecting the
-     *         <code>X-Forwarded-For</code> request header, if present.
+     *         {@literal X-Forwarded-For} request header, if present.
      */
-    protected String getCanonicalClientIpAddress() {
+    private String getCanonicalClientIPAddress() {
         String addr;
         // The value is supposed to be in the format: "client, proxy1, proxy2"
         final String forwardedFor =
@@ -408,69 +384,195 @@ public abstract class AbstractResource extends ServerResource {
         return addr;
     }
 
-    protected ImageRepresentation getRepresentation(OperationList ops,
-                                                    Format format,
-                                                    Disposition disposition,
-                                                    Processor proc)
-            throws IOException, ProcessorException, CacheException {
-        // Max allowed size is ignored when the processing is a no-op.
-        final long maxAllowedSize = (ops.hasEffect(format)) ?
-                Configuration.getInstance().getLong(Key.MAX_PIXELS, 0) : 0;
-
-        final Info imageInfo = getOrReadInfo(ops.getIdentifier(), proc);
-        final Dimension effectiveSize = ops.getResultingSize(imageInfo.getSize());
-        if (maxAllowedSize > 0 &&
-                effectiveSize.width * effectiveSize.height > maxAllowedSize) {
-            throw new PayloadTooLargeException();
+    /**
+     * N.B.: This method should not be called with different arguments during
+     * the same request cycle.
+     *
+     * @return Delegate proxy for the current request. The result is cached.
+     *         May be {@literal null}.
+     */
+    protected DelegateProxy getDelegateProxy() {
+        if (delegateProxy == null && DelegateProxyService.isEnabled()) {
+            DelegateProxyService service = DelegateProxyService.getInstance();
+            try {
+                delegateProxy = service.newDelegateProxy(getRequestContext());
+            } catch (DisabledException e) {
+                LOGGER.debug("newDelegateProxy(): {}", e.getMessage());
+            }
         }
-
-        return new ImageRepresentation(imageInfo, proc, ops, disposition,
-                isBypassingCache());
+        return delegateProxy;
     }
 
     /**
-     * Gets the image info corresponding to the given identifier, first by
-     * checking the cache and then, if necessary, by reading it from the image
-     * and caching the result.
+     * @return Decoded identifier component of the URI. N.B.: This may not be
+     *         the identifier that the client supplies or sees; for that, use
+     *         {@link #getPublicIdentifier()}. Also may return {@literal null}.
+     * @see #getPublicIdentifier()
+     */
+    protected Identifier getIdentifier() {
+        final Map<String,Object> attrs = getRequest().getAttributes();
+        // Get the raw identifier from the URI.
+        final String urlIdentifier = (String) attrs.get("identifier");
+        // It will be null if the current route does not have an identifier
+        // path component.
+        if (urlIdentifier != null) {
+            // Decode entities.
+            final String decodedIdentifier = Reference.decode(urlIdentifier);
+            // Decode slash substitutes.
+            final String identifier = decodeSlashes(decodedIdentifier);
+
+            LOGGER.debug("Identifier requested: {} -> decoded: {} -> " +
+                            "slashes substituted: {}",
+                    urlIdentifier, decodedIdentifier, identifier);
+
+            return new Identifier(identifier);
+        }
+        return null;
+    }
+
+    /**
+     * <p>Returns the image info for the source image corresponding to the
+     * given identifier as efficiently as possible.</p>
      *
      * @param identifier
-     * @param proc
-     * @return Info for the image with the given identifier, retrieved
-     *         from the given processor.
-     * @throws ProcessorException
-     * @throws CacheException
+     * @param proc       Processor from which to read the info, if it can't be
+     *                   retrieved from a cache.
+     * @return           Info for the image with the given identifier.
      */
     protected final Info getOrReadInfo(final Identifier identifier,
-                                       final Processor proc)
-            throws ProcessorException, CacheException {
-        Info info = null;
+                                       final Processor proc) throws IOException {
+        Info info;
         if (!isBypassingCache()) {
-            DerivativeCache cache = CacheFactory.getDerivativeCache();
-            if (cache != null) {
-                final Stopwatch watch = new Stopwatch();
-                info = cache.getImageInfo(identifier);
-                if (info != null) {
-                    logger.debug("getOrReadInfo(): retrieved dimensions of {} from cache in {} msec",
-                            identifier, watch.timeElapsed());
-                } else {
-                    info = readInfo(identifier, proc);
-                    cache.put(identifier, info);
-                }
-            }
+            info = new CacheFacade().getOrReadInfo(identifier, proc);
+            info.setIdentifier(identifier);
         } else {
-            logger.debug("getOrReadInfo(): bypassing the cache, as requested");
-        }
-        if (info == null) {
-            info = readInfo(identifier, proc);
+            LOGGER.debug("getOrReadInfo(): bypassing the cache, as requested");
+            info = proc.readImageInfo();
+            info.setIdentifier(identifier);
         }
         return info;
     }
 
     /**
-     * @return Whether there is a <var>cache</var> query parameter set to
-     *         <code>false</code> in the URI.
+     * @return Value of either the {@link #PUBLIC_IDENTIFIER_HEADER} or
+     *         {@link #PUBLIC_IDENTIFIER_HEADER_DEPRECATED} headers, if
+     *         available, or else the {@literal identifier} URI path
+     *         component, with any escaping preserved.
      */
-    private boolean isBypassingCache() {
+    protected String getPublicIdentifier() {
+        final Map<String,Object> attrs = getRequest().getAttributes();
+        final String urlID = (String) attrs.get("identifier");
+
+        // Try to use the new header, if supplied.
+        String header = PUBLIC_IDENTIFIER_HEADER;
+        String headerID = getRequest().getHeaders().getFirstValue(header, true);
+        if (headerID == null || headerID.isEmpty()) {
+            // Fall back to the deprecated one.
+            header = PUBLIC_IDENTIFIER_HEADER_DEPRECATED;
+            headerID = getRequest().getHeaders().getFirstValue(header, true);
+        }
+        return (headerID != null && !headerID.isEmpty()) ? headerID : urlID;
+    }
+
+    /**
+     * @see #getPublicRootReference()
+     */
+    protected Reference getPublicReference() {
+        final Request request = getRequest();
+        return getPublicReference(request.getRootRef(),
+                request.getResourceRef(), request.getHeaders());
+    }
+
+    /**
+     * @see #getPublicReference()
+     */
+    protected Reference getPublicRootReference() {
+        final Request request = getRequest();
+        return getPublicReference(request.getRootRef(),
+                request.getRootRef(), request.getHeaders());
+    }
+
+    /**
+     * <p>Returns a content disposition based on the following in order of
+     * preference:</p>
+     *
+     * <ol>
+     *     <li>The value of the {@link #RESPONSE_CONTENT_DISPOSITION_QUERY_ARG}
+     *     query argument</li>
+     *     <li>The setting of {@link Key#IIIF_CONTENT_DISPOSITION} in the
+     *     application configuration</li>
+     * </ol>
+     *
+     * <p>Falls back to an empty disposition.</p>
+     *
+     * <p>If the disposition is {@literal attachment} and the filename is not
+     * set, it will be set to a reasonable value based on the given identifier
+     * and output format.</p>
+     *
+     * @param queryArg Value of the {@link
+     *                 #RESPONSE_CONTENT_DISPOSITION_QUERY_ARG} query argument.
+     * @param identifier
+     * @param outputFormat
+     */
+    protected Disposition getRepresentationDisposition(String queryArg,
+                                                       Identifier identifier,
+                                                       Format outputFormat) {
+        final Disposition disposition = new Disposition();
+        // If a query argument value is available, use that. Otherwise, consult
+        // the configuration.
+        if (queryArg != null) {
+            if (queryArg.startsWith("inline")) {
+                disposition.setType(Disposition.TYPE_INLINE);
+            } else if (queryArg.startsWith("attachment")) {
+                Pattern pattern = Pattern.compile(".*filename=\\\"(.*)\\\".*");
+                Matcher m = pattern.matcher(queryArg);
+                String filename;
+                if (m.matches()) {
+                    // Filter out filename-unsafe characters as well as ".."
+                    filename = StringUtil.sanitize(m.group(1),
+                            Pattern.compile("\\.\\."),
+                            Pattern.compile(StringUtil.FILENAME_REGEX));
+                } else {
+                    filename = getContentDispositionFilename(identifier,
+                            outputFormat);
+                }
+                disposition.setType(Disposition.TYPE_ATTACHMENT);
+                disposition.setFilename(filename);
+            }
+        } else {
+            switch (Configuration.getInstance()
+                    .getString(Key.IIIF_CONTENT_DISPOSITION, "none")) {
+                case "inline":
+                    disposition.setType(Disposition.TYPE_INLINE);
+                    break;
+                case "attachment":
+                    disposition.setType(Disposition.TYPE_ATTACHMENT);
+                    disposition.setFilename(getContentDispositionFilename(
+                            identifier, outputFormat));
+                    break;
+            }
+        }
+        return disposition;
+    }
+
+    private String getContentDispositionFilename(Identifier identifier,
+                                                 Format outputFormat) {
+        return identifier.toString().replaceAll(StringUtil.FILENAME_REGEX, "_") +
+                "." + outputFormat.getPreferredExtension();
+    }
+
+    /**
+     * @return Instance with basic info already set.
+     */
+    protected RequestContext getRequestContext() {
+        return requestContext;
+    }
+
+    /**
+     * @return Whether there is a <var>cache</var> query argument set to
+     *         {@literal false} in the URI.
+     */
+    protected boolean isBypassingCache() {
         boolean bypassingCache = false;
         Parameter cacheParam = getReference().getQueryAsForm().getFirst("cache");
         if (cacheParam != null) {
@@ -480,49 +582,23 @@ public abstract class AbstractResource extends ServerResource {
     }
 
     /**
-     * Reads the information of the source image.
-     *
-     * @param identifier
-     * @param proc
-     * @return
-     * @throws ProcessorException
-     */
-    private Info readInfo(final Identifier identifier,
-                          final Processor proc) throws ProcessorException {
-        final Stopwatch watch = new Stopwatch();
-        final Info info = proc.readImageInfo();
-        logger.debug("readInfo(): read from {} in {} msec", identifier,
-                watch.timeElapsed());
-        return info;
-    }
-
-    /**
      * @param name Template pathname, with leading slash.
-     * @return Representation using the given template and the common template
-     *         variables.
+     * @return     Representation using the given template and the common
+     *             template variables.
      */
     public Representation template(String name) {
-        return template(name, getCommonTemplateVars(getRequest()));
+        return template(name, new HashMap<>());
     }
 
     /**
      * @param name Template pathname, with leading slash.
-     * @return Representation using the given template and the given template
-     *         variables.
+     * @param vars Template variables.
+     * @return     Representation using the given template and the given
+     *             template variables.
      */
     public Representation template(String name, Map<String,Object> vars) {
-        final String template = templateCache.get(name);
-        if (template != null) {
-            try {
-                return new TemplateRepresentation(
-                        new StringRepresentation(template), vars,
-                        MediaType.TEXT_HTML);
-            } catch (IOException e) {
-                logger.error(e.getMessage());
-                return new StringRepresentation(e.getMessage());
-            }
-        }
-        return new EmptyRepresentation();
+        vars.putAll(getCommonTemplateVars(getRequest()));
+        return new VelocityRepresentation(name, vars);
     }
 
 }

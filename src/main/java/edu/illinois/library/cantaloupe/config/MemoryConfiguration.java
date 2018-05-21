@@ -3,7 +3,9 @@ package edu.illinois.library.cantaloupe.config;
 import org.apache.commons.configuration.ConversionException;
 
 import java.io.File;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -14,7 +16,7 @@ import java.util.concurrent.ConcurrentMap;
 class MemoryConfiguration extends AbstractConfiguration
         implements Configuration {
 
-    private ConcurrentMap<String,Object> configuration =
+    private final ConcurrentMap<String,Object> configuration =
             new ConcurrentHashMap<>();
 
     @Override
@@ -32,13 +34,17 @@ class MemoryConfiguration extends AbstractConfiguration
         Object value = configuration.get(key);
         boolean bool;
         if (value != null) {
-            String stringValue = value.toString();
-            if (stringValue.equals("1") || stringValue.equals("true")) {
-                bool = true;
-            } else if (stringValue.equals("0") || stringValue.equals("false")) {
-                bool = false;
-            } else {
-                throw new ConversionException(key);
+            switch (value.toString()) {
+                case "1":
+                case "true":
+                    bool = true;
+                    break;
+                case "0":
+                case "false":
+                    bool = false;
+                    break;
+                default:
+                    throw new ConversionException(key);
             }
             return bool;
         } else {
@@ -183,7 +189,7 @@ class MemoryConfiguration extends AbstractConfiguration
      * No-op.
      */
     @Override
-    public synchronized void reload() {}
+    public void reload() {}
 
     /**
      * No-op.
@@ -207,5 +213,10 @@ class MemoryConfiguration extends AbstractConfiguration
      */
     @Override
     public void stopWatching() {}
+
+    @Override
+    public Map<String, Object> toMap() {
+        return Collections.unmodifiableMap(configuration);
+    }
 
 }

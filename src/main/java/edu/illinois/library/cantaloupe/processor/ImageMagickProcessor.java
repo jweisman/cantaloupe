@@ -1,5 +1,6 @@
 package edu.illinois.library.cantaloupe.processor;
 
+import edu.illinois.library.cantaloupe.Application;
 import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Compression;
@@ -8,19 +9,22 @@ import edu.illinois.library.cantaloupe.operation.Color;
 import edu.illinois.library.cantaloupe.operation.ColorTransform;
 import edu.illinois.library.cantaloupe.operation.Crop;
 import edu.illinois.library.cantaloupe.image.Format;
+import edu.illinois.library.cantaloupe.image.Orientation;
 import edu.illinois.library.cantaloupe.operation.Encode;
 import edu.illinois.library.cantaloupe.operation.Normalize;
 import edu.illinois.library.cantaloupe.operation.Operation;
 import edu.illinois.library.cantaloupe.operation.OperationList;
-import edu.illinois.library.cantaloupe.operation.Orientation;
 import edu.illinois.library.cantaloupe.operation.Rotate;
 import edu.illinois.library.cantaloupe.operation.Scale;
 import edu.illinois.library.cantaloupe.operation.Sharpen;
 import edu.illinois.library.cantaloupe.operation.Transpose;
+import edu.illinois.library.cantaloupe.operation.overlay.ImageOverlay;
+import edu.illinois.library.cantaloupe.operation.overlay.Overlay;
+import edu.illinois.library.cantaloupe.operation.overlay.Position;
+import edu.illinois.library.cantaloupe.process.ArrayListOutputConsumer;
+import edu.illinois.library.cantaloupe.process.Pipe;
+import edu.illinois.library.cantaloupe.process.ProcessStarter;
 import org.apache.commons.lang3.StringUtils;
-import org.im4java.process.ArrayListOutputConsumer;
-import org.im4java.process.Pipe;
-import org.im4java.process.ProcessStarter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,12 +35,18 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -61,115 +71,90 @@ import java.util.concurrent.atomic.AtomicBoolean;
 class ImageMagickProcessor extends AbstractMagickProcessor
         implements StreamProcessor {
 
-    private static Logger logger = LoggerFactory.
-            getLogger(ImageMagickProcessor.class);
+    enum IMVersion {
+        VERSION_PRE_7, VERSION_7
+    }
+
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(ImageMagickProcessor.class);
+
+    static final String OVERLAY_TEMP_FILE_PREFIX = Application.getName() + "-" +
+            ImageMagickProcessor.class.getSimpleName() + "-overlay";
+
+    private static final AtomicBoolean initializationAttempted =
+            new AtomicBoolean(false);
+    private static InitializationException initializationException;
+
+    private static final AtomicBoolean checkedVersion =
+            new AtomicBoolean(false);
 
     // ImageMagick 7 uses a `magick` command. Earlier versions use `convert`
-    // and `identify`.
-    private static AtomicBoolean isUsingVersion7;
-    private static final Object lock = new Object();
+    // and `identify`. IM7 may provide aliases for these.
+    private static IMVersion imVersion;
 
-    // Lazy-initialized by getFormats()
-    protected static Map<Format, Set<Format>> supportedFormats;
+    /** Map of overlay images downloaded from web servers. Files are temp files
+    set to delete-on-exit. */
+    private static final Map<URI,File> overlays = new ConcurrentHashMap<>();
+
+    /** Lazy-initialized by readFormats(). */
+    protected static final Map<Format, Set<Format>> supportedFormats =
+            new HashMap<>();
 
     /**
-     * @return Map of available output formats for all known source formats,
-     * based on information reported by <code>identify -list format</code>.
+     * <p>Checks the ImageMagick version by attempting to invoke the `magick`
+     * command. If the invocation fails, we assume that we are using version
+     * &le; 6.</p>
+     *
+     * <p>The result is cached.</p>
+     *
+     * @return ImageMagick version.
      */
-    private static synchronized Map<Format, Set<Format>> getFormats() {
-        if (supportedFormats == null) {
-            final Set<Format> formats = new HashSet<>();
-            final Set<Format> outputFormats = new HashSet<>();
+    static synchronized IMVersion getIMVersion() {
+        if (!checkedVersion.get()) {
+            checkedVersion.set(true);
 
-            // Retrieve the output of the `identify -list format` command,
-            // which contains a list of all supported formats.
+            // Search for the IM 7+ `magick` command
             final ProcessBuilder pb = new ProcessBuilder();
-            final List<String> command = new ArrayList<>();
-            if (isUsingVersion7()) {
-                command.add(getPath("magick"));
-                command.add("identify");
-            } else {
-                command.add(getPath("identify"));
-            }
-            command.add("-list");
-            command.add("format");
+            List<String> command = new ArrayList<>();
+            command.add(getPath("magick"));
             pb.command(command);
-            final String commandString = StringUtils.join(pb.command(), " ");
-
             try {
-                logger.info("getFormats(): invoking {}", commandString);
+                final String commandString = StringUtils.join(pb.command(), " ");
+                LOGGER.debug("getIMVersion(): trying to invoke {}",
+                        commandString);
                 final Process process = pb.start();
-                final InputStream pis = process.getInputStream();
-                final InputStreamReader reader = new InputStreamReader(pis);
-                try (final BufferedReader buffReader = new BufferedReader(reader)) {
-                    String s;
-                    while ((s = buffReader.readLine()) != null) {
-                        s = s.trim();
-                        if (s.startsWith("BMP")) {
-                            formats.add(Format.BMP);
-                            if (s.contains(" rw")) {
-                                outputFormats.add(Format.BMP);
-                            }
-                        } else if (s.startsWith("DCM")) {
-                            formats.add(Format.DCM);
-                            if (s.contains(" rw")) {
-                                outputFormats.add(Format.DCM);
-                            }
-                        } else if (s.startsWith("GIF")) {
-                            formats.add(Format.GIF);
-                            if (s.contains(" rw")) {
-                                outputFormats.add(Format.GIF);
-                            }
-                        } else if (s.startsWith("JP2")) {
-                            formats.add(Format.JP2);
-                            if (s.contains(" rw")) {
-                                outputFormats.add(Format.JP2);
-                            }
-                        } else if (s.startsWith("JPEG")) {
-                            formats.add(Format.JPG);
-                            if (s.contains(" rw")) {
-                                outputFormats.add(Format.JPG);
-                            }
-                        } else if (s.startsWith("PNG")) {
-                            formats.add(Format.PNG);
-                            if (s.contains(" rw")) {
-                                outputFormats.add(Format.PNG);
-                            }
-                        } else if (s.startsWith("PDF") && s.contains(" rw")) {
-                            formats.add(Format.PDF);
-                        } else if (s.startsWith("TIFF")) {
-                            formats.add(Format.TIF);
-                            if (s.contains(" rw")) {
-                                outputFormats.add(Format.TIF);
-                            }
-                        } else if (s.startsWith("SGI") && s.contains("  r")) {
-                            formats.add(Format.SGI);
-                        } else if (s.startsWith("WEBP")) {
-                            formats.add(Format.WEBP);
-                            if (s.contains(" rw")) {
-                                outputFormats.add(Format.WEBP);
-                            }
-                        }
-                    }
-                    process.waitFor();
-                } catch (InterruptedException e) {
-                    logger.error("getFormats(): {}", e.getMessage());
-                }
-            } catch (IOException e) {
-                logger.error("getFormats(): {}", e.getMessage());
-            }
+                process.waitFor();
+                LOGGER.info("getIMVersion(): found magick command; assuming " +
+                        "ImageMagick 7+");
+                imVersion = IMVersion.VERSION_7;
+            } catch (Exception e) {
+                LOGGER.info("getIMVersion(): couldn't find magick command; " +
+                        "checking for IM <7");
 
-            supportedFormats = new HashMap<>();
-            for (Format format : formats) {
-                supportedFormats.put(format, outputFormats);
+                // Search for the IM <7 `identify` command
+                command = new ArrayList<>();
+                command.add(getPath("identify"));
+                pb.command(command);
+                try {
+                    final String commandString = StringUtils.join(pb.command(), " ");
+                    LOGGER.debug("getIMVersion(): trying to invoke {}",
+                            commandString);
+                    final Process process = pb.start();
+                    process.waitFor();
+                    LOGGER.info("getIMVersion(): found identify command; " +
+                            "assuming ImageMagick <7");
+                    imVersion = IMVersion.VERSION_PRE_7;
+                } catch (Exception e2) {
+                    LOGGER.error("getIMVersion(): couldn't find an " +
+                            "ImageMagick binary");
+                }
             }
         }
-        return supportedFormats;
+        return imVersion;
     }
 
     /**
      * @param binaryName Name of an executable.
-     * @return
      */
     private static String getPath(final String binaryName) {
         String path = Configuration.getInstance().
@@ -184,61 +169,177 @@ class ImageMagickProcessor extends AbstractMagickProcessor
     }
 
     /**
-     * <p>Checks for ImageMagick 7 by attempting to invoke the `magick`
-     * command. If the invocation fails, we assume that we are using version
-     * <= 6.</p>
-     *
-     * <p>The result is cached.</p>
-     *
-     * @return Whether we appear to be using ImageMagick 7.
+     * Performs one-time class-level/shared initialization.
      */
-    private static boolean isUsingVersion7() {
-        if (isUsingVersion7 == null) {
-            synchronized (lock) {
-                final ProcessBuilder pb = new ProcessBuilder();
-                final List<String> command = new ArrayList<>();
-                command.add(getPath("magick"));
-                pb.command(command);
-                try {
-                    isUsingVersion7 = new AtomicBoolean(false);
-                    final String commandString = StringUtils.join(pb.command(), " ");
-                    logger.debug("isUsingVersion7(): trying to invoke {}",
-                            commandString);
-                    final Process process = pb.start();
-                    process.waitFor();
-                    logger.info("isUsingVersion7(): found magick command; " +
-                            "assuming ImageMagick 7+");
-                    isUsingVersion7.set(true);
-                } catch (Exception e) {
-                    logger.info("isUsingVersion7(): couldn't find magick " +
-                            "command; assuming ImageMagick <7");
-                    isUsingVersion7.set(false);
+    private static synchronized void initialize() {
+        initializationAttempted.set(true);
+        readFormats();
+    }
+
+    /**
+     * @return Map of available output formats for all known source formats,
+     *         based on information reported by {@literal
+     *         identify -list format}.
+     */
+    private static synchronized Map<Format, Set<Format>> readFormats() {
+        if (supportedFormats.isEmpty()) {
+            final Set<Format> sourceFormats = EnumSet.noneOf(Format.class);
+            final Set<Format> outputFormats = EnumSet.noneOf(Format.class);
+
+            final ProcessBuilder pb = new ProcessBuilder();
+            final List<String> command = new ArrayList<>();
+            try {
+                IMVersion version = getIMVersion();
+                if (version != null) {
+                    switch (getIMVersion()) {
+                        case VERSION_PRE_7:
+                            command.add(getPath("identify"));
+                            break;
+                        default:
+                            command.add(getPath("magick"));
+                            command.add("identify");
+                            break;
+                    }
+                } else {
+                    throw new IOException("Can't find `magick` or `identify` binaries");
                 }
+
+                command.add("-list");
+                command.add("format");
+                pb.command(command);
+                final String commandString = String.join(" ", pb.command());
+
+                LOGGER.info("readFormats(): invoking {}", commandString);
+                final Process process = pb.start();
+                final InputStream pis = process.getInputStream();
+                final InputStreamReader isReader =
+                        new InputStreamReader(pis, "UTF-8");
+                try (final BufferedReader bReader = new BufferedReader(isReader)) {
+                    String s;
+                    while ((s = bReader.readLine()) != null) {
+                        s = s.trim();
+                        if (s.startsWith("BMP")) {
+                            sourceFormats.add(Format.BMP);
+                            if (s.contains(" rw")) {
+                                outputFormats.add(Format.BMP);
+                            }
+                        } else if (s.startsWith("DCM")) {
+                            sourceFormats.add(Format.DCM);
+                            if (s.contains(" rw")) {
+                                outputFormats.add(Format.DCM);
+                            }
+                        } else if (s.startsWith("GIF")) {
+                            sourceFormats.add(Format.GIF);
+                            if (s.contains(" rw")) {
+                                outputFormats.add(Format.GIF);
+                            }
+                        } else if (s.startsWith("JP2")) {
+                            sourceFormats.add(Format.JP2);
+                            if (s.contains(" rw")) {
+                                outputFormats.add(Format.JP2);
+                            }
+                        } else if (s.startsWith("JPEG")) {
+                            sourceFormats.add(Format.JPG);
+                            if (s.contains(" rw")) {
+                                outputFormats.add(Format.JPG);
+                            }
+                        } else if (s.startsWith("PDF") && s.contains("  r")) {
+                            sourceFormats.add(Format.PDF);
+                        } else if (s.startsWith("PNG")) {
+                            sourceFormats.add(Format.PNG);
+                            if (s.contains(" rw")) {
+                                outputFormats.add(Format.PNG);
+                            }
+                        } else if (s.startsWith("TIFF")) {
+                            sourceFormats.add(Format.TIF);
+                            if (s.contains(" rw")) {
+                                outputFormats.add(Format.TIF);
+                            }
+                        } else if (s.startsWith("WEBP")) {
+                            sourceFormats.add(Format.WEBP);
+                            if (s.contains(" rw")) {
+                                outputFormats.add(Format.WEBP);
+                            }
+                        }
+                    }
+                    process.waitFor();
+
+                    for (Format format : sourceFormats) {
+                        supportedFormats.put(format, outputFormats);
+                    }
+                }
+            } catch (IOException | InterruptedException e) {
+                initializationException = new InitializationException(e);
+                // This is safe to swallow.
             }
         }
-        return isUsingVersion7.get();
+        return supportedFormats;
+    }
+
+    /**
+     * For testing only!
+     */
+    static synchronized void resetInitialization() {
+        initializationAttempted.set(false);
+        initializationException = null;
+        supportedFormats.clear();
+        checkedVersion.set(false);
+        imVersion = null;
+    }
+
+    /**
+     * For testing only!
+     */
+    static synchronized void setIMVersion(IMVersion version) {
+        imVersion = version;
+        checkedVersion.set(true);
+    }
+
+    ImageMagickProcessor() {
+        if (!initializationAttempted.get()) {
+            initialize();
+        }
     }
 
     @Override
     public Set<Format> getAvailableOutputFormats() {
-        Set<Format> formats = getFormats().get(format);
+        Set<Format> formats = readFormats().get(sourceFormat);
         if (formats == null) {
-            formats = new HashSet<>();
+            formats = Collections.unmodifiableSet(Collections.emptySet());
         }
         return formats;
     }
 
     private List<String> getConvertArguments(final OperationList ops,
                                              final Info imageInfo) {
-        final List<String> args = new ArrayList<>();
+        final List<String> args = new ArrayList<>(30);
 
-        if (isUsingVersion7()) {
+        if (IMVersion.VERSION_7.equals(getIMVersion())) {
             args.add(getPath("magick"));
             args.add("convert");
         } else {
             args.add(getPath("convert"));
         }
-        args.add(format.getPreferredExtension() + ":-"); // read from stdin
+
+        // If we need to rasterize, and the op list contains a scale operation,
+        // see if we can use it to compute a scale-appropriate DPI.
+        // This needs to be done before the source argument is added.
+        if (Format.ImageType.VECTOR.equals(imageInfo.getSourceFormat().getImageType())) {
+            Scale scale = (Scale) ops.getFirst(Scale.class);
+            if (scale == null) {
+                scale = new Scale();
+            }
+            args.add("-density");
+            args.add("" + new RasterizationHelper().getDPI(scale,
+                    imageInfo.getSize()));
+        }
+
+        int pageIndex = getIMImageIndex(
+                (String) ops.getOptions().get("page"),
+                imageInfo.getSourceFormat());
+
+        // :- = read from stdin
+        args.add(sourceFormat.getPreferredExtension() + ":-[" + pageIndex + "]");
 
         Encode encode = (Encode) ops.getFirst(Encode.class);
 
@@ -264,7 +365,6 @@ class ImageMagickProcessor extends AbstractMagickProcessor
                 args.add("-normalize");
             } else if (op instanceof Crop) {
                 Crop crop = (Crop) op;
-                crop.applyOrientation(imageInfo.getOrientation(), fullSize);
                 if (crop.hasEffect(fullSize, ops)) {
                     args.add("-crop");
                     if (crop.getShape().equals(Crop.Shape.SQUARE)) {
@@ -308,20 +408,26 @@ class ImageMagickProcessor extends AbstractMagickProcessor
 
                     args.add("-resize");
                     if (scale.getPercent() != null) {
-                        final String arg = (scale.getPercent() * 100) + "%";
-                        args.add(arg);
-                    } else if (scale.getMode() == Scale.Mode.ASPECT_FIT_WIDTH) {
-                        args.add(scale.getWidth().toString());
-                    } else if (scale.getMode() == Scale.Mode.ASPECT_FIT_HEIGHT) {
-                        args.add(scale.getHeight().toString());
-                    } else if (scale.getMode() == Scale.Mode.NON_ASPECT_FILL) {
-                        final String arg = String.format("%dx%d!",
-                                scale.getWidth(), scale.getHeight());
-                        args.add(arg);
-                    } else if (scale.getMode() == Scale.Mode.ASPECT_FIT_INSIDE) {
-                        final String arg = String.format("%dx%d",
-                                scale.getWidth(), scale.getHeight());
-                        args.add(arg);
+                        args.add((scale.getPercent() * 100) + "%");
+                    } else {
+                        switch (scale.getMode()) {
+                            case ASPECT_FIT_WIDTH:
+                                args.add(scale.getWidth().toString() + "x");
+                                break;
+                            case ASPECT_FIT_HEIGHT:
+                                args.add("x" + scale.getHeight().toString());
+                                break;
+                            case NON_ASPECT_FILL:
+                                String arg = String.format("%dx%d!",
+                                        scale.getWidth(), scale.getHeight());
+                                args.add(arg);
+                                break;
+                            case ASPECT_FIT_INSIDE:
+                                arg = String.format("%dx%d",
+                                        scale.getWidth(), scale.getHeight());
+                                args.add(arg);
+                                break;
+                        }
                     }
                 }
             } else if (op instanceof Transpose) {
@@ -353,6 +459,31 @@ class ImageMagickProcessor extends AbstractMagickProcessor
                 if (op.hasEffect(fullSize, ops)) {
                     args.add("-unsharp");
                     args.add(Double.toString(((Sharpen) op).getAmount()));
+                }
+            } else if (op instanceof ImageOverlay) {
+                try {
+                    final ImageOverlay overlay = (ImageOverlay) op;
+                    File file = getOverlayTempFile(overlay);
+                    if (file != null) {
+                        args.add(file.getAbsolutePath());
+                        args.add("-compose");
+                        args.add("over");
+                        args.add("-gravity");
+                        args.add(getIMOverlayGravity(overlay.getPosition()));
+                        args.add("-geometry");
+                        args.add(getIMOverlayGeometry(overlay));
+                        args.add("-composite");
+                    } else {
+                        if (overlay.getURI() != null) {
+                            LOGGER.warn("getConvertArguments(): overlay not found: {}",
+                                    overlay.getURI());
+                        } else {
+                            LOGGER.error("getConvertArguments(): overlay source not set");
+                        }
+                    }
+                } catch (IOException e) {
+                    LOGGER.error("getConvertArguments(): overlay error: {}",
+                            e.getMessage());
                 }
             } else if (op instanceof Encode) {
                 encode = (Encode) op;
@@ -388,9 +519,8 @@ class ImageMagickProcessor extends AbstractMagickProcessor
     }
 
     /**
-     * @param filter
-     * @return String suitable for passing to convert's <code>-filter</code>
-     *         argument, or <code>null</code> if an equivalent is unknown.
+     * @return String suitable for passing to convert's {@literal -filter}
+     *         argument, or {@literal null} if an equivalent is unknown.
      */
     private String getIMFilter(Scale.Filter filter) {
         // http://www.imagemagick.org/Usage/filter/
@@ -416,9 +546,91 @@ class ImageMagickProcessor extends AbstractMagickProcessor
     }
 
     /**
-     * @param compression May be <code>null</code>.
-     * @return String suitable for passing to convert's <code>-compress</code>
-     *         argument.
+     * @param pageStr      Client-provided page number.
+     * @param sourceFormat Format of the source image.
+     * @return             ImageMagick image index argument.
+     */
+    private int getIMImageIndex(String pageStr, Format sourceFormat) {
+        int index = 0;
+        if (pageStr != null && Format.PDF.equals(sourceFormat)) {
+            try {
+                index = Integer.parseInt(pageStr) - 1;
+            } catch (NumberFormatException e) {
+                LOGGER.info("Page number from URI query string is not " +
+                        "an integer; using page 1.");
+            }
+            index = Math.max(index, 0);
+        }
+        return index;
+    }
+
+    String getIMOverlayGeometry(Overlay overlay) {
+        int x = 0, y = 0;
+        switch (overlay.getPosition()) {
+            case TOP_LEFT:
+                x += overlay.getInset();
+                y += overlay.getInset();
+                break;
+            case TOP_CENTER:
+                y += overlay.getInset();
+                break;
+            case TOP_RIGHT:
+                x += overlay.getInset();
+                y += overlay.getInset();
+                break;
+            case LEFT_CENTER:
+                x += overlay.getInset();
+                break;
+            case CENTER:
+                // noop
+                break;
+            case RIGHT_CENTER:
+                x += overlay.getInset();
+                break;
+            case BOTTOM_LEFT:
+                x += overlay.getInset();
+                y += overlay.getInset();
+                break;
+            case BOTTOM_CENTER:
+                y += overlay.getInset();
+                break;
+            case BOTTOM_RIGHT:
+                x += overlay.getInset();
+                y += overlay.getInset();
+                break;
+        }
+        String xStr = (x > -1) ? "+" + x : "" + x;
+        String yStr = (y > -1) ? "+" + y : "" + y;
+        return xStr + yStr;
+    }
+
+    String getIMOverlayGravity(Position position) {
+        switch (position) {
+            case TOP_LEFT:
+                return "northwest";
+            case TOP_CENTER:
+                return "north";
+            case TOP_RIGHT:
+                return "northeast";
+            case LEFT_CENTER:
+                return "west";
+            case RIGHT_CENTER:
+                return "east";
+            case BOTTOM_LEFT:
+                return "southwest";
+            case BOTTOM_CENTER:
+                return "south";
+            case BOTTOM_RIGHT:
+                return "southeast";
+            default:
+                return "center";
+        }
+    }
+
+    /**
+     * @param compression May be {@literal null}.
+     * @return            String suitable for passing to {@literal convert}'s
+     *                    {@literal -compress} argument.
      */
     private String getIMTIFFCompression(Compression compression) {
         if (compression != null) {
@@ -437,18 +649,58 @@ class ImageMagickProcessor extends AbstractMagickProcessor
     }
 
     @Override
+    public InitializationException getInitializationException() {
+        initialize();
+        return initializationException;
+    }
+
+    File getOverlayTempFile(ImageOverlay overlay) throws IOException {
+        File overlayFile = null;
+        final URI url = overlay.getURI();
+
+        if (url != null) {
+            // Try to retrieve it if it has already been downloaded.
+            overlayFile = overlays.get(url);
+            if (overlayFile == null) {
+                // It doesn't exist, so download it.
+                Path tempFile = Files.createTempFile(OVERLAY_TEMP_FILE_PREFIX, ".tmp");
+                try (InputStream is = overlay.openStream()) {
+                    Files.copy(is, tempFile, StandardCopyOption.REPLACE_EXISTING);
+                    overlayFile = tempFile.toFile();
+                    overlays.put(url, overlayFile);
+                } finally {
+                    if (overlayFile != null) {
+                        overlayFile.deleteOnExit();
+                    }
+                }
+            }
+        }
+        return overlayFile;
+    }
+
+    @Override
+    public List<String> getWarnings() {
+        final List<String> warnings = new ArrayList<>();
+        if (IMVersion.VERSION_PRE_7.equals(getIMVersion())) {
+            warnings.add("Support for ImageMagick <7 will be removed in a " +
+                    "future release. Please upgrade to version 7.");
+        }
+        return Collections.unmodifiableList(warnings);
+    }
+
+    @Override
     public void process(final OperationList ops,
                         final Info imageInfo,
                         final OutputStream outputStream)
             throws ProcessorException {
         super.process(ops, imageInfo, outputStream);
 
-        try (InputStream inputStream = streamSource.newInputStream()) {
+        try (InputStream inputStream = streamFactory.newInputStream()) {
             final List<String> args = getConvertArguments(ops, imageInfo);
             final ProcessStarter cmd = new ProcessStarter();
             cmd.setInputProvider(new Pipe(inputStream, null));
             cmd.setOutputConsumer(new Pipe(null, outputStream));
-            logger.info("process(): invoking {}", StringUtils.join(args, " "));
+            LOGGER.info("process(): invoking {}", String.join(" ", args));
             cmd.run(args);
         } catch (Exception e) {
             throw new ProcessorException(e.getMessage(), e);
@@ -456,10 +708,10 @@ class ImageMagickProcessor extends AbstractMagickProcessor
     }
 
     @Override
-    public Info readImageInfo() throws ProcessorException {
-        try (InputStream inputStream = streamSource.newInputStream()) {
+    public Info readImageInfo() throws IOException {
+        try (InputStream inputStream = streamFactory.newInputStream()) {
             final List<String> args = new ArrayList<>();
-            if (isUsingVersion7()) {
+            if (IMVersion.VERSION_7.equals(getIMVersion())) {
                 args.add(getPath("magick"));
                 args.add("identify");
             } else {
@@ -467,10 +719,16 @@ class ImageMagickProcessor extends AbstractMagickProcessor
             }
             args.add("-ping");
             args.add("-format");
-            // We need to read this even when not respecting orientation,
-            // because GM's crop operation is orientation-unaware.
-            args.add("%w\n%h\n%[EXIF:Orientation]");
-            args.add(format.getPreferredExtension() + ":-");
+            // N.B. 1: We need to read this even when not respecting
+            // orientation, because IM's crop operation is orientation-unaware.
+            // N.B. 2: IM (7.0.6-7) seems to have some kind of issue with
+            // retrieving EXIF tags by name. The glob works around it. This
+            // should be OK, as I don't think there are any other EXIF tags
+            // that would match this. Another benefit of the glob is that it
+            // suppresses an "unknown image property" warning when the source
+            // image has no Orientation tag.
+            args.add("%w\n%h\n%[EXIF:*Orientation]");
+            args.add(sourceFormat.getPreferredExtension() + ":-");
 
             final ArrayListOutputConsumer consumer =
                     new ArrayListOutputConsumer();
@@ -478,31 +736,40 @@ class ImageMagickProcessor extends AbstractMagickProcessor
             final ProcessStarter cmd = new ProcessStarter();
             cmd.setInputProvider(new Pipe(inputStream, null));
             cmd.setOutputConsumer(consumer);
-            logger.info("readImageInfo(): invoking {}",
-                    StringUtils.join(args, " ").replace("\n", ","));
+            final String cmdString = String.join(" ", args).replace("\n", ",");
+            LOGGER.debug("readImageInfo(): invoking {}", cmdString);
             cmd.run(args);
 
             final List<String> output = consumer.getOutput();
-            final int width = Integer.parseInt(output.get(0));
-            final int height = Integer.parseInt(output.get(1));
-            // GM is not tile-aware, so set the tile size to the full
-            // dimensions.
-            final Info info = new Info(width, height, width, height,
-                    getSourceFormat());
-            // Do we have an EXIF orientation to deal with?
-            if (output.size() > 2) {
-                try {
-                    final int exifOrientation = Integer.parseInt(output.get(2));
-                    final Orientation orientation =
-                            Orientation.forEXIFOrientation(exifOrientation);
-                    info.getImages().get(0).setOrientation(orientation);
-                } catch (IllegalArgumentException e) {
-                    // whatever
+            if (!output.isEmpty()) {
+                final int width = Integer.parseInt(output.get(0));
+                final int height = Integer.parseInt(output.get(1));
+                // GM is not tile-aware, so set the tile size to the full
+                // dimensions.
+                final Info info = Info.builder()
+                        .withSize(width, height)
+                        .withTileSize(width, height)
+                        .withFormat(sourceFormat)
+                        .build();
+                // Do we have an EXIF orientation to deal with?
+                if (output.size() > 2) {
+                    try {
+                        final int exifOrientation = Integer.parseInt(output.get(2));
+                        final Orientation orientation =
+                                Orientation.forEXIFOrientation(exifOrientation);
+                        info.getImages().get(0).setOrientation(orientation);
+                    } catch (IllegalArgumentException e) {
+                        LOGGER.warn("readImageInfo(): {}", e.getMessage());
+                    }
                 }
+                return info;
             }
-            return info;
+            throw new IOException("readImageInfo(): nothing received on " +
+                    "stdout from command: " + cmdString);
+        } catch (IOException e) {
+            throw e;
         } catch (Exception e) {
-            throw new ProcessorException(e.getMessage(), e);
+            throw new IOException(e);
         }
     }
 

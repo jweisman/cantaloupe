@@ -1,87 +1,77 @@
 package edu.illinois.library.cantaloupe.test;
 
-import org.restlet.Application;
-import org.restlet.Component;
-import org.restlet.Restlet;
-import org.restlet.data.Protocol;
-import org.restlet.resource.Directory;
-import org.restlet.routing.Router;
-import org.restlet.routing.Template;
+import edu.illinois.library.cantaloupe.http.Server;
+import edu.illinois.library.cantaloupe.util.SystemUtils;
+import org.eclipse.jetty.server.Handler;
 
-import java.io.File;
 import java.io.IOException;
+import java.net.URI;
+import java.nio.file.Path;
 
 /**
- * HTTP server that serves static content using the fixture path as its root.
- * Call {@link #start()} and then {@link #getUri()} to get its URL.
+ * Wraps a {@link Server} for convenient functional testing.
  */
-public class WebServer {
+public final class WebServer {
 
-    private static class WebApplication extends Application {
+    public static final String BASIC_REALM = "Test Realm";
+    public static final String BASIC_USER = "user";
+    public static final String BASIC_SECRET = "secret";
 
-        private File root;
+    private final Server wrappedServer = new Server();
 
-        public WebApplication(File root) {
-            super();
-            this.root = root;
-        }
-
-        /**
-         * Creates a root Restlet that will receive all incoming calls.
-         */
-        @Override
-        public Restlet createInboundRoot() {
-            final Router router = new Router(getContext());
-            router.setDefaultMatchingMode(Template.MODE_EQUALS);
-            final Directory dir = new Directory(getContext(),
-                    "file://" + root.getAbsolutePath());
-            dir.setDeeplyAccessible(true);
-            dir.setListingAllowed(false);
-            dir.setNegotiatingContent(false);
-            router.attach("", dir);
-            return router;
-        }
-    }
-
-    private Component component;
-    private int port = TestUtil.getOpenPort();
-    private File root;
-
-    /**
-     * Initializes a static file HTTP server using the fixture path as its
-     * root.
-     *
-     * @throws IOException
-     */
     public WebServer() throws IOException {
-        String path = TestUtil.getFixturePath().toAbsolutePath() + "/images";
-        this.root = new File(path);
+        Path imagesPath = TestUtil.getFixturePath().resolve("images");
+        wrappedServer.setRoot(imagesPath);
+        wrappedServer.setKeyStorePath(TestUtil.getFixture("keystore.jks"));
+        wrappedServer.setKeyStorePassword("password");
+        wrappedServer.setKeyManagerPassword("password");
+        wrappedServer.setHTTP1Enabled(true);
+        wrappedServer.setHTTP2Enabled(true);
+        wrappedServer.setHTTPS1Enabled(true);
+        wrappedServer.setHTTPS2Enabled(SystemUtils.isALPNAvailable());
     }
 
-    public WebServer(File root) {
-        this.root = root;
+    public URI getHTTPURI() {
+        return wrappedServer.getHTTPURI();
     }
 
-    public int getPort() {
-        return this.port;
+    public URI getHTTPSURI() {
+        return wrappedServer.getHTTPSURI();
     }
 
-    public String getUri() {
-        return "http://localhost:" + getPort();
+    public void setBasicAuthEnabled(boolean enabled) {
+        wrappedServer.setAuthRealm(BASIC_REALM);
+        wrappedServer.setAuthUser(BASIC_USER);
+        wrappedServer.setAuthSecret(BASIC_SECRET);
+        wrappedServer.setBasicAuthEnabled(enabled);
+    }
+
+    public void setHandler(Handler handler) {
+        wrappedServer.setHandler(handler);
+    }
+
+    public void setHTTP1Enabled(boolean enabled) {
+        wrappedServer.setHTTP1Enabled(enabled);
+    }
+
+    public void setHTTP2Enabled(boolean enabled) {
+        wrappedServer.setHTTP2Enabled(enabled);
+    }
+
+    public void setHTTPS1Enabled(boolean enabled) {
+        wrappedServer.setHTTPS1Enabled(enabled);
+    }
+
+    public void setHTTPS2Enabled(boolean enabled) {
+        wrappedServer.setHTTPS2Enabled(enabled);
     }
 
     public void start() throws Exception {
-        component = new Component();
-        component.getServers().add(Protocol.HTTP, port);
-        component.getClients().add(Protocol.FILE);
-        component.getDefaultHost().attach("", new WebApplication(this.root));
-        component.start();
+        wrappedServer.start();
     }
 
     public void stop() throws Exception {
-        if (!component.isStopped()) {
-            component.stop();
-        }
+        wrappedServer.stop();
     }
 
 }

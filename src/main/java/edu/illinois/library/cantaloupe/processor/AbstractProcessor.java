@@ -12,13 +12,9 @@ import java.util.Set;
  */
 abstract class AbstractProcessor {
 
-    protected Format format;
+    protected Format sourceFormat;
 
     abstract public Set<Format> getAvailableOutputFormats();
-
-    public Format getSourceFormat() {
-        return this.format;
-    }
 
     /**
      * Limited implementation that performs some preflight checks. Subclasses
@@ -40,8 +36,8 @@ abstract class AbstractProcessor {
 
     public void setSourceFormat(Format format)
             throws UnsupportedSourceFormatException{
-        this.format = format;
-        if (getAvailableOutputFormats().size() < 1) {
+        this.sourceFormat = format;
+        if (getAvailableOutputFormats().isEmpty()) {
             throw new UnsupportedSourceFormatException(
                     (Processor) this, format);
         }

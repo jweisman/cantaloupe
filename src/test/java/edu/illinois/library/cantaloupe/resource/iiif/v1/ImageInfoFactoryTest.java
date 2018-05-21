@@ -1,9 +1,9 @@
 package edu.illinois.library.cantaloupe.resource.iiif.v1;
 
 import edu.illinois.library.cantaloupe.config.Configuration;
-import edu.illinois.library.cantaloupe.config.ConfigurationFactory;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Format;
+import edu.illinois.library.cantaloupe.image.Info;
 import edu.illinois.library.cantaloupe.processor.FileProcessor;
 import edu.illinois.library.cantaloupe.processor.Processor;
 import edu.illinois.library.cantaloupe.processor.ProcessorFactory;
@@ -17,137 +17,156 @@ import static org.junit.Assert.*;
 public class ImageInfoFactoryTest extends BaseTest {
 
     private String imageUri;
-    private ImageInfo info;
+    private ImageInfo imageInfo;
     private Processor processor;
 
     @Before
     public void setUp() throws Exception {
         super.setUp();
 
-        Configuration config = ConfigurationFactory.getInstance();
+        Configuration config = Configuration.getInstance();
         config.setProperty(Key.PROCESSOR_FALLBACK, "Java2dProcessor");
 
         imageUri = "http://example.org/bla";
-        processor = new ProcessorFactory().getProcessor(Format.JPG);
+        processor = new ProcessorFactory().newProcessor(Format.JPG);
         ((FileProcessor) processor).setSourceFile(
                 TestUtil.getImage("jpg-rgb-594x522x8-baseline.jpg"));
 
-        info = ImageInfoFactory.newImageInfo(imageUri, processor,
-                processor.readImageInfo());
+        Info info = processor.readImageInfo();
+        Info.Image infoImage = info.getImages().get(0);
+        imageInfo = new ImageInfoFactory().newImageInfo(imageUri, processor,
+                infoImage, info.getNumResolutions());
+    }
+
+    @Override
+    public void tearDown() throws Exception {
+        try {
+            super.tearDown();
+        } finally {
+            processor.close();
+        }
     }
 
     private void setUpForRotatedImage() throws Exception {
-        Configuration config = ConfigurationFactory.getInstance();
-        config.setProperty("metadata.respect_orientation", true);
+        Configuration config = Configuration.getInstance();
+        config.setProperty(Key.PROCESSOR_RESPECT_ORIENTATION, true);
 
-        processor = new ProcessorFactory().getProcessor(Format.JPG);
+        processor.close();
+        processor = new ProcessorFactory().newProcessor(Format.JPG);
         ((FileProcessor) processor).setSourceFile(
                 TestUtil.getImage("jpg-rotated.jpg"));
 
-        info = ImageInfoFactory.newImageInfo(imageUri, processor,
-                processor.readImageInfo());
+        Info info = processor.readImageInfo();
+        Info.Image infoImage = info.getImages().get(0);
+        imageInfo = new ImageInfoFactory().newImageInfo(imageUri, processor,
+                infoImage, info.getNumResolutions());
     }
 
     @Test
-    public void testNewImageInfoContext() {
-        assertEquals("http://library.stanford.edu/iiif/image-api/1.1/context.json", info.context);
+    public void newImageInfoContext() {
+        assertEquals("http://library.stanford.edu/iiif/image-api/1.1/context.json",
+                imageInfo.context);
     }
 
     @Test
-    public void testNewImageInfoId() {
-        assertEquals("http://example.org/bla", info.id);
+    public void newImageInfoId() {
+        assertEquals("http://example.org/bla", imageInfo.id);
     }
 
     @Test
-    public void testNewImageInfoWidth() {
-        assertEquals(594, (long) info.width);
+    public void newImageInfoWidth() {
+        assertEquals(594, (long) imageInfo.width);
     }
 
     @Test
-    public void testNewImageInfoWidthWithRotatedImage() throws Exception {
+    public void newImageInfoWidthWithRotatedImage() throws Exception {
         setUpForRotatedImage();
-        assertEquals(64, (long) info.width);
+        assertEquals(64, (long) imageInfo.width);
     }
 
     @Test
-    public void testNewImageInfoHeight() {
-        assertEquals(522, (long) info.height);
+    public void newImageInfoHeight() {
+        assertEquals(522, (long) imageInfo.height);
     }
 
     @Test
-    public void testNewImageInfoHeightWithRotatedImage() throws Exception {
+    public void newImageInfoHeightWithRotatedImage() throws Exception {
         setUpForRotatedImage();
-        assertEquals(56, (long) info.height);
+        assertEquals(56, (long) imageInfo.height);
     }
 
     @Test
-    public void testNewImageInfoScaleFactors() {
-        assertEquals(4, info.scaleFactors.size());
-        assertEquals(1, (long) info.scaleFactors.get(0));
-        assertEquals(2, (long) info.scaleFactors.get(1));
-        assertEquals(4, (long) info.scaleFactors.get(2));
-        assertEquals(8, (long) info.scaleFactors.get(3));
+    public void newImageInfoScaleFactors() {
+        assertEquals(4, imageInfo.scaleFactors.size());
+        assertEquals(1, (long) imageInfo.scaleFactors.get(0));
+        assertEquals(2, (long) imageInfo.scaleFactors.get(1));
+        assertEquals(4, (long) imageInfo.scaleFactors.get(2));
+        assertEquals(8, (long) imageInfo.scaleFactors.get(3));
     }
 
     @Test
-    public void testNewImageInfoTileWidthWithUntiledImage() {
-        assertEquals(594, (long) info.tileWidth);
+    public void newImageInfoTileWidthWithUntiledImage() {
+        assertEquals(594, (long) imageInfo.tileWidth);
     }
 
     @Test
-    public void testNewImageInfoTileWidthWithRotatedImage() throws Exception {
+    public void newImageInfoTileWidthWithRotatedImage() throws Exception {
         setUpForRotatedImage();
-        assertEquals(64, (long) info.tileWidth);
+        assertEquals(64, (long) imageInfo.tileWidth);
     }
 
     @Test
-    public void testNewImageInfoTileWidthWithTiledImage() throws Exception {
+    public void newImageInfoTileWidthWithTiledImage() throws Exception {
         processor.setSourceFormat(Format.TIF);
         ((FileProcessor) processor).setSourceFile(
-                TestUtil.getImage("tif-rgb-monores-64x56x8-tiled-uncompressed.tif"));
-        info = ImageInfoFactory.newImageInfo(imageUri, processor,
-                processor.readImageInfo());
+                TestUtil.getImage("tif-rgb-1res-64x56x8-tiled-uncompressed.tif"));
+        Info info = processor.readImageInfo();
+        Info.Image infoImage = info.getImages().get(0);
+        imageInfo = new ImageInfoFactory().newImageInfo(imageUri, processor,
+                infoImage, info.getNumResolutions());
 
-        assertEquals(64, (long) info.tileWidth);
+        assertEquals(64, (long) imageInfo.tileWidth);
     }
 
     @Test
-    public void testNewImageInfoTileHeightWithUntiledImage() {
-        assertEquals(522, (long) info.tileHeight);
+    public void newImageInfoTileHeightWithUntiledImage() {
+        assertEquals(522, (long) imageInfo.tileHeight);
     }
 
     @Test
-    public void testNewImageInfoTileHeightWithRotatedImage() throws Exception {
+    public void newImageInfoTileHeightWithRotatedImage() throws Exception {
         setUpForRotatedImage();
-        assertEquals(56, (long) info.tileHeight);
+        assertEquals(56, (long) imageInfo.tileHeight);
     }
 
     @Test
-    public void testNewImageInfoTileHeightWithTiledImage() throws Exception {
+    public void newImageInfoTileHeightWithTiledImage() throws Exception {
         processor.setSourceFormat(Format.TIF);
         ((FileProcessor) processor).setSourceFile(
-                TestUtil.getImage("tif-rgb-monores-64x56x8-tiled-uncompressed.tif"));
-        info = ImageInfoFactory.newImageInfo(imageUri, processor,
-                processor.readImageInfo());
+                TestUtil.getImage("tif-rgb-1res-64x56x8-tiled-uncompressed.tif"));
+        Info info = processor.readImageInfo();
+        Info.Image infoImage = info.getImages().get(0);
+        imageInfo = new ImageInfoFactory().newImageInfo(imageUri, processor,
+                infoImage, info.getNumResolutions());
 
-        assertEquals(64, (long) info.tileWidth);
-        assertEquals(56, (long) info.tileHeight);
+        assertEquals(64, (long) imageInfo.tileWidth);
+        assertEquals(56, (long) imageInfo.tileHeight);
     }
 
     @Test
-    public void testNewImageInfoFormats() {
-        assertTrue(info.formats.contains("jpg"));
+    public void newImageInfoFormats() {
+        assertTrue(imageInfo.formats.contains("jpg"));
     }
 
     @Test
-    public void testNewImageInfoQualities() {
-        assertTrue(info.qualities.contains("color"));
+    public void newImageInfoQualities() {
+        assertTrue(imageInfo.qualities.contains("color"));
     }
 
     @Test
-    public void testNewImageInfoProfile() {
+    public void newImageInfoProfile() {
         assertEquals("http://library.stanford.edu/iiif/image-api/1.1/compliance.html#level2",
-                info.profile);
+                imageInfo.profile);
     }
 
 }

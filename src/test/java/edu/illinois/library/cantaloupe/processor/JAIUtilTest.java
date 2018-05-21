@@ -4,13 +4,14 @@ import edu.illinois.library.cantaloupe.operation.ColorTransform;
 import edu.illinois.library.cantaloupe.operation.Crop;
 import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.operation.OperationList;
-import edu.illinois.library.cantaloupe.operation.Orientation;
+import edu.illinois.library.cantaloupe.image.Orientation;
 import edu.illinois.library.cantaloupe.operation.ReductionFactor;
 import edu.illinois.library.cantaloupe.operation.Rotate;
 import edu.illinois.library.cantaloupe.operation.Scale;
 import edu.illinois.library.cantaloupe.operation.Sharpen;
 import edu.illinois.library.cantaloupe.operation.Transpose;
-import edu.illinois.library.cantaloupe.processor.imageio.ImageReader;
+import edu.illinois.library.cantaloupe.processor.codec.ImageReader;
+import edu.illinois.library.cantaloupe.processor.codec.ImageReaderFactory;
 import edu.illinois.library.cantaloupe.test.BaseTest;
 import edu.illinois.library.cantaloupe.test.TestUtil;
 import org.junit.Test;
@@ -27,15 +28,18 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
+import static edu.illinois.library.cantaloupe.test.Assert.ImageAssert.*;
 import static org.junit.Assert.*;
 
 public class JAIUtilTest extends BaseTest {
 
-    private static final String IMAGE = "images/jpg-rgb-64x56x8-baseline.jpg";
+    private static final String IMAGE = "png-rgb-64x56x8.png";
+
+    /* cropImage(RenderedOp, Crop) */
 
     @Test
-    public void testCropImage() throws Exception {
-        RenderedOp inImage = getFixture(IMAGE);
+    public void cropImage() throws Exception {
+        RenderedOp inImage = readImage(IMAGE);
 
         // full
         Crop crop = new Crop();
@@ -70,32 +74,94 @@ public class JAIUtilTest extends BaseTest {
         assertEquals(28, outImage.getHeight());
     }
 
-    @Test
-    public void testCropImageWithReductionFactor() {
-        // TODO: write this
-    }
+    /* cropImage(RenderedOp, Crop, ReductionFactor) */
 
     @Test
-    public void testFilterImage() {
-        // TODO: write this
+    public void cropImageWithReductionFactor() throws Exception {
+        final float fudge = 0.000000001f;
+        RenderedOp inImage = readImage(IMAGE);
+
+        // full
+        Crop crop = new Crop();
+        crop.setFull(true);
+        ReductionFactor rf = new ReductionFactor(1);
+        RenderedOp outImage = JAIUtil.cropImage(inImage, crop, rf);
+        assertSame(inImage, outImage);
+
+        // square
+        crop = new Crop();
+        crop.setShape(Crop.Shape.SQUARE);
+        crop.setWidth(50f);
+        crop.setHeight(50f);
+        outImage = JAIUtil.cropImage(inImage, crop);
+        assertEquals(inImage.getHeight(), outImage.getWidth());
+        assertEquals(inImage.getHeight(), outImage.getHeight());
+
+        // pixel crop
+        crop = new Crop();
+        crop.setWidth(50f);
+        crop.setHeight(50f);
+        rf = new ReductionFactor(1);
+        outImage = JAIUtil.cropImage(inImage, crop, rf);
+        assertEquals(25, outImage.getWidth());
+        assertEquals(25, outImage.getHeight());
+
+        // percentage crop
+        crop = new Crop();
+        crop.setUnit(Crop.Unit.PERCENT);
+        crop.setX(0.5f);
+        crop.setY(0.5f);
+        crop.setWidth(0.5f);
+        crop.setHeight(0.5f);
+        rf = new ReductionFactor(1);
+        outImage = JAIUtil.cropImage(inImage, crop, rf);
+        assertEquals(inImage.getWidth() / 4f, outImage.getWidth(), fudge);
+        assertEquals(inImage.getHeight() / 4f, outImage.getHeight(), fudge);
     }
 
+    /* getAsRenderedOp() */
+
     @Test
-    public void testReformatImage() throws Exception {
-        final OperationList ops = new OperationList();
-        ImageReader reader = new ImageReader(
-                TestUtil.getFixture(IMAGE), Format.JPG);
-        RenderedImage image = reader.readRendered(ops, Orientation.ROTATE_0,
-                new ReductionFactor(), null);
+    public void getAsRenderedOp() throws Exception {
+        RenderedImage image = readImage(IMAGE);
         PlanarImage planarImage = PlanarImage.wrapRenderedImage(image);
         RenderedOp renderedOp = JAIUtil.getAsRenderedOp(planarImage);
         assertEquals(64, renderedOp.getWidth());
         assertEquals(56, renderedOp.getHeight());
     }
 
+    /* reduceTo8Bits() */
+
     @Test
-    public void testRotateImage() throws Exception {
-        RenderedOp inImage = getFixture(IMAGE);
+    public void reduceTo8BitsWith16BitImage() throws Exception {
+        RenderedOp inImage = readImage("png-rgb-64x56x16.png");
+        assertEquals(16, inImage.getColorModel().getComponentSize(0));
+
+        RenderedOp outImage = JAIUtil.reduceTo8Bits(inImage);
+        assertEquals(8, outImage.getColorModel().getComponentSize(0));
+    }
+
+    @Test
+    public void reduceTo8BitsWith8BitImage() throws Exception {
+        RenderedOp inImage = readImage("png-rgb-64x56x8.png");
+        assertEquals(8, inImage.getColorModel().getComponentSize(0));
+
+        RenderedOp outImage = JAIUtil.reduceTo8Bits(inImage);
+        assertSame(inImage, outImage);
+    }
+
+    /* rescalePixels() */
+
+    @Test
+    public void rescalePixels() {
+        // TODO: write this
+    }
+
+    /* rotateImage() */
+
+    @Test
+    public void rotateImage() throws Exception {
+        RenderedOp inImage = readImage(IMAGE);
 
         // test with no-op rotate
         Rotate rotate = new Rotate(0);
@@ -121,9 +187,11 @@ public class JAIUtilTest extends BaseTest {
         assertEquals(expectedHeight, rotatedImage.getHeight());
     }
 
+    /* scaleImage() */
+
     @Test
-    public void testScaleImage() throws Exception {
-        RenderedOp image = getFixture(IMAGE);
+    public void scaleImage() throws Exception {
+        RenderedOp image = readImage(IMAGE);
         final Interpolation interpolation =
                 Interpolation.getInstance(Interpolation.INTERP_BILINEAR);
         final ReductionFactor rf = new ReductionFactor();
@@ -237,9 +305,11 @@ public class JAIUtilTest extends BaseTest {
                 scaledImage.getHeight());
     }
 
+    /* scaleImageUsingSubsampleAverage() */
+
     @Test
-    public void testScaleImageUsingSubsampleAverage() throws Exception {
-        RenderedOp image = getFixture(IMAGE);
+    public void scaleImageUsingSubsampleAverage() throws Exception {
+        RenderedOp image = readImage(IMAGE);
         final ReductionFactor rf = new ReductionFactor();
         final double fudge = 0.00000001f;
 
@@ -351,9 +421,11 @@ public class JAIUtilTest extends BaseTest {
                 scaledImage.getHeight());
     }
 
+    /* sharpenImage() */
+
     @Test
-    public void testSharpenImage() throws Exception {
-        RenderedOp image = getFixture(IMAGE);
+    public void sharpenImage() throws Exception {
+        RenderedOp image = readImage(IMAGE);
 
         // test with no-op sharpen
         Sharpen sharpen = new Sharpen();
@@ -368,8 +440,10 @@ public class JAIUtilTest extends BaseTest {
         assertNotSame(image, sharpenedImage);
     }
 
+    /* stretchContrast() */
+
     @Test
-    public void testStretchContrast() throws IOException {
+    public void stretchContrast() throws IOException {
         BufferedImage image = new BufferedImage(100, 100,
                 BufferedImage.TYPE_INT_RGB);
         final Rectangle leftHalf = new Rectangle(0, 0, 50, 100);
@@ -392,40 +466,60 @@ public class JAIUtilTest extends BaseTest {
         assertEquals(-1, image.getRGB(90, 90));
     }
 
+    /* transformColor() */
+
     @Test
-    public void testTransformColor() throws Exception {
-        RenderedOp image = getFixture(IMAGE);
-        ColorTransform transform = ColorTransform.GRAY;
+    public void transformColorToBitonal() throws Exception {
+        RenderedOp image = readImage(IMAGE);
+        ColorTransform transform = ColorTransform.BITONAL;
+
         RenderedOp result = JAIUtil.transformColor(image, transform);
-        assertEquals(1, result.getSampleModel().getNumBands());
-        assertEquals(8, result.getColorModel().getComponentSize(0));
-        // TODO: test ColorTransform.BITONAL
+        BufferedImage bimage = result.getAsBufferedImage();
+        assertRGBA(bimage.getRGB(0, 0), 0, 0, 0, 255);
     }
 
     @Test
-    public void testTransposeImage() throws Exception {
-        // TODO: this test could be better
-        RenderedOp image = getFixture(IMAGE);
+    public void transformColorToGray() throws Exception {
+        RenderedOp image = readImage(IMAGE);
+        ColorTransform transform = ColorTransform.GRAY;
+
+        RenderedOp result = JAIUtil.transformColor(image, transform);
+        assertEquals(1, result.getSampleModel().getNumBands());
+
+        BufferedImage bimage = result.getAsBufferedImage();
+        assertGray(bimage.getRGB(0, 0));
+    }
+
+    /* transposeImage() */
+
+    @Test
+    public void transposeImage() throws Exception {
+        RenderedOp image = readImage(IMAGE);
         // horizontal
-        Transpose transpose = Transpose.HORIZONTAL;
-        RenderedOp result = JAIUtil.transposeImage(image, transpose);
+        RenderedOp result = JAIUtil.transposeImage(image, Transpose.HORIZONTAL);
         assertEquals(image.getWidth(), result.getWidth());
         assertEquals(image.getHeight(), result.getHeight());
         // vertical
-        transpose = Transpose.VERTICAL;
-        result = JAIUtil.transposeImage(image, transpose);
+        result = JAIUtil.transposeImage(image, Transpose.VERTICAL);
         assertEquals(image.getWidth(), result.getWidth());
         assertEquals(image.getHeight(), result.getHeight());
     }
 
-    private RenderedOp getFixture(final String name) throws Exception {
+    private RenderedOp readImage(final String name) throws Exception {
         final OperationList ops = new OperationList();
-        ImageReader reader = new ImageReader(
-                TestUtil.getFixture(name), Format.JPG);
-        RenderedImage image = reader.readRendered(ops, Orientation.ROTATE_0,
-                new ReductionFactor(), null);
-        PlanarImage planarImage = PlanarImage.wrapRenderedImage(image);
-        return JAIUtil.getAsRenderedOp(planarImage);
+        ImageReader reader = null;
+        try {
+            reader = new ImageReaderFactory().newImageReader(
+                    TestUtil.getImage(name), Format.PNG);
+            RenderedImage image = reader.readRendered(
+                    ops, Orientation.ROTATE_0, new ReductionFactor(), null);
+            PlanarImage planarImage = PlanarImage.wrapRenderedImage(image);
+            return JAIUtil.getAsRenderedOp(planarImage);
+        } finally {
+            if (reader != null) {
+                reader.dispose();
+            }
+        }
     }
 
 }

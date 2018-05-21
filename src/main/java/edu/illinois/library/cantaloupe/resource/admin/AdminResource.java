@@ -1,58 +1,50 @@
 package edu.illinois.library.cantaloupe.resource.admin;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import edu.illinois.library.cantaloupe.cache.Cache;
+import edu.illinois.library.cantaloupe.RestletApplication;
 import edu.illinois.library.cantaloupe.cache.CacheFactory;
 import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.image.Identifier;
 import edu.illinois.library.cantaloupe.operation.Scale;
+import edu.illinois.library.cantaloupe.processor.InitializationException;
 import edu.illinois.library.cantaloupe.processor.Processor;
 import edu.illinois.library.cantaloupe.processor.ProcessorFactory;
 import edu.illinois.library.cantaloupe.processor.UnsupportedSourceFormatException;
-import edu.illinois.library.cantaloupe.resolver.Resolver;
-import edu.illinois.library.cantaloupe.resolver.ResolverFactory;
-import edu.illinois.library.cantaloupe.resource.AbstractResource;
-import edu.illinois.library.cantaloupe.resource.EndpointDisabledException;
-import edu.illinois.library.cantaloupe.resource.JSONRepresentation;
-import edu.illinois.library.cantaloupe.resource.SourceImageWrangler;
-import org.restlet.data.CacheDirective;
+import edu.illinois.library.cantaloupe.source.Source;
+import edu.illinois.library.cantaloupe.source.SourceFactory;
 import org.restlet.data.Header;
-import org.restlet.representation.EmptyRepresentation;
 import org.restlet.representation.Representation;
 import org.restlet.resource.Get;
-import org.restlet.resource.Post;
-import org.restlet.resource.ResourceException;
 import org.restlet.util.Series;
-import org.slf4j.LoggerFactory;
 
 import java.awt.GraphicsEnvironment;
 import java.io.File;
-import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.stream.Collectors;
 
-public class AdminResource extends AbstractResource {
+/**
+ * Handles the web-based Control Panel.
+ */
+public class AdminResource extends AbstractAdminResource {
 
     /**
-     * <p>Resolver, caches, etc. can't be accessed from the templates, so
+     * <p>Sources, caches, etc. can't be accessed from the templates, so
      * instances of this class will proxy for them.</p>
      *
-     * <p>Velocity requires this class to be public.</p>
+     * <p>N.B.: Velocity requires this class to be public.</p>
      */
     public static class ObjectProxy {
         protected Object object;
 
-        public ObjectProxy(Object object) {
+        ObjectProxy(Object object) {
             this.object = object;
         }
 
@@ -61,9 +53,12 @@ public class AdminResource extends AbstractResource {
         }
     }
 
+    /**
+     * N.B.: Velocity requires this class to be public.
+     */
     public static class ProcessorProxy extends ObjectProxy {
 
-        public ProcessorProxy(Processor proc) {
+        ProcessorProxy(Processor proc) {
             super(proc);
         }
 
@@ -75,123 +70,57 @@ public class AdminResource extends AbstractResource {
                 return false;
             }
         }
-    }
 
-    private class ObjectProxyComparator implements Comparator<ObjectProxy> {
-        public int compare(ObjectProxy o1, ObjectProxy o2) {
-            return o1.getName().compareTo(o2.getName());
+        /**
+         * @return List of all processor warnings, plus the message of the
+         *         return value of
+         *         {@link Processor#getInitializationException()}, if any.
+         */
+        public List<String> getWarnings() {
+            Processor proc = (Processor) object;
+
+            List<String> warnings = new ArrayList<>();
+
+            // Add the InitializationException message
+            InitializationException e = proc.getInitializationException();
+            if (e != null) {
+                warnings.add(e.getMessage());
+            }
+
+            // Add warnings
+            warnings.addAll(proc.getWarnings());
+
+            return warnings;
         }
-    }
-
-    private static org.slf4j.Logger logger = LoggerFactory.
-            getLogger(AdminResource.class);
-
-    @Override
-    protected void doInit() throws ResourceException {
-        if (!Configuration.getInstance().getBoolean(Key.ADMIN_ENABLED, false)) {
-            throw new EndpointDisabledException();
-        }
-        super.doInit();
-
-        // Add a "Cache-Control: no-cache" header because this page contains
-        // live information pertaining to the function of the application.
-        getResponseCacheDirectives().add(CacheDirective.noCache());
     }
 
     /**
      * @return HTML representation of the admin interface.
-     * @throws Exception
      */
     @Get("html")
-    public Representation doGetAsHtml() throws Exception {
+    public Representation doGet() {
         return template("/admin.vm", getTemplateVars());
     }
 
     /**
-     * @return JSON application configuration. <strong>This may contain
-     *         sensitive info and must be protected.</strong>
-     * @throws Exception
+     * @return Map containing keys that will be used as variables in the admin
+     *         interface's HTML template.
      */
-    @Get("json")
-    public Representation doGetAsJson() throws Exception {
-        return new JSONRepresentation(configurationAsMap());
-    }
-
-    /**
-     * Deserializes submitted JSON data and updates the application
-     * configuration instance with it.
-     *
-     * @param rep
-     * @throws IOException
-     */
-    @Post("json")
-    public Representation doPost(Representation rep) throws IOException {
-        final Configuration config = Configuration.getInstance();
-        final Map submittedConfig = new ObjectMapper().readValue(
-                rep.getStream(), HashMap.class);
-
-        // Copy configuration keys and values from the request JSON payload to
-        // the application configuration.
-        for (final Object key : submittedConfig.keySet()) {
-            final Object value = submittedConfig.get(key);
-            logger.debug("Setting {} = {}", key, value);
-            config.setProperty((String) key, value);
-
-        }
-
-        config.save();
-
-        return new EmptyRepresentation();
-    }
-
-    /**
-     * @return Map representation of the application configuration.
-     */
-    private Map<String,Object> configurationAsMap() {
-        final Configuration config = Configuration.getInstance();
-        final Map<String,Object> configMap = new HashMap<>();
-        final Iterator it = config.getKeys();
-        while (it.hasNext()) {
-            final String key = (String) it.next();
-            final Object value = config.getProperty(key);
-            configMap.put(key, value);
-        }
-        return configMap;
-    }
-
-    /**
-     * @return Map containing variables for use in the admin interface HTML
-     *         template.
-     * @throws Exception
-     */
-    private Map<String,Object> getTemplateVars() throws Exception {
+    private Map<String,Object> getTemplateVars() {
         final Map<String, Object> vars = getCommonTemplateVars(getRequest());
+        vars.put("adminUri", vars.get("baseUri") + RestletApplication.ADMIN_PATH);
 
         ////////////////////////////////////////////////////////////////////
         //////////////////////// status section ////////////////////////////
         ////////////////////////////////////////////////////////////////////
 
-        // VM arguments
+        // VM info
         RuntimeMXBean runtimeMxBean = ManagementFactory.getRuntimeMXBean();
         vars.put("vmArguments", runtimeMxBean.getInputArguments());
-
-        // memory
-        final int mb = 1024 * 1024;
-        Runtime runtime = Runtime.getRuntime();
-        vars.put("usedHeap", (runtime.totalMemory() - runtime.freeMemory()) / mb);
-        vars.put("freeHeap", runtime.freeMemory() / mb);
-        vars.put("totalHeap", runtime.totalMemory() / mb);
-        vars.put("maxHeap", runtime.maxMemory() / mb);
-        final double usedPercent = (runtime.totalMemory() - runtime.freeMemory()) /
-                (double) runtime.maxMemory();
-        vars.put("memoryBarValue", usedPercent * 100);
-        String memoryBarClass = "progress-bar-success";
-        if (usedPercent > 0.8) {
-            memoryBarClass = "progress-bar-danger";
-        } else if (usedPercent > 0.7) {
-            memoryBarClass = "progress-bar-warning";
-        }
-        vars.put("memoryBarClass", memoryBarClass);
+        vars.put("vmName", runtimeMxBean.getVmName());
+        vars.put("vmVendor", runtimeMxBean.getVmVendor());
+        vars.put("vmVersion", runtimeMxBean.getVmVersion());
+        vars.put("javaVersion", runtimeMxBean.getSpecVersion());
 
         // Reverse-Proxy headers
         final Series<Header> headers = getRequest().getHeaders();
@@ -205,33 +134,36 @@ public class AdminResource extends AbstractResource {
                 headers.getFirstValue("X-Forwarded-Path", true, ""));
         vars.put("xForwardedForHeader",
                 headers.getFirstValue("X-Forwarded-For", true, ""));
-        vars.put("xIiifIdHeader",
-                headers.getFirstValue("X-IIIF-ID", true, ""));
 
         final File configFile = Configuration.getInstance().getFile();
         vars.put("configFilePath", (configFile != null) ?
                 configFile.getAbsolutePath() : "None");
 
         ////////////////////////////////////////////////////////////////////
-        /////////////////////// resolver section ///////////////////////////
+        //////////////////////// sources section ///////////////////////////
         ////////////////////////////////////////////////////////////////////
 
-        ResolverFactory.SelectionStrategy selectionStrategy =
-                new ResolverFactory().getSelectionStrategy();
-        vars.put("resolverSelectionStrategy", selectionStrategy);
+        SourceFactory.SelectionStrategy selectionStrategy =
+                new SourceFactory().getSelectionStrategy();
+        vars.put("sourceSelectionStrategy", selectionStrategy);
 
-        if (selectionStrategy.equals(ResolverFactory.SelectionStrategy.STATIC)) {
-            vars.put("currentResolver", new ObjectProxy(
-                    new ResolverFactory().getResolver(new Identifier("irrelevant"))));
+        if (selectionStrategy.equals(SourceFactory.SelectionStrategy.STATIC)) {
+            try {
+                Source source = new SourceFactory().newSource(
+                        new Identifier("irrelevant"),
+                        getDelegateProxy());
+                vars.put("currentSource", new ObjectProxy(source));
+            } catch (Exception e) {
+                // nothing we can do
+            }
         }
 
-        List<ObjectProxy> sortedProxies = new ArrayList<>();
-        for (Resolver resolver : ResolverFactory.getAllResolvers()) {
-            sortedProxies.add(new ObjectProxy(resolver));
-        }
-
-        Collections.sort(sortedProxies, new ObjectProxyComparator());
-        vars.put("resolvers", sortedProxies);
+        List<ObjectProxy> sortedProxies = SourceFactory.getAllSources().
+                stream().
+                map(ObjectProxy::new).
+                sorted(Comparator.comparing(ObjectProxy::getName)).
+                collect(Collectors.toList());
+        vars.put("sources", sortedProxies);
 
         ////////////////////////////////////////////////////////////////////
         ////////////////////// processors section //////////////////////////
@@ -240,56 +172,44 @@ public class AdminResource extends AbstractResource {
         // source format assignments
         Map<Format,ProcessorProxy> assignments = new TreeMap<>();
         for (Format format : Format.values()) {
-            try {
-                assignments.put(format,
-                        new ProcessorProxy(new ProcessorFactory().getProcessor(format)));
-            } catch (UnsupportedSourceFormatException e) {
-                // noop
+            try (Processor proc = new ProcessorFactory().newProcessor(format)) {
+                assignments.put(format, new ProcessorProxy(proc));
+            } catch (UnsupportedSourceFormatException |
+                    InitializationException |
+                    ReflectiveOperationException e) {
+                // nothing we can do
             }
         }
         vars.put("processorAssignments", assignments);
 
-        class SourceFormatComparator implements Comparator<Format> {
-            public int compare(Format o1, Format o2) {
-                return o1.getName().compareTo(o2.getName());
-            }
-        }
-
         // image source formats
-        List<Format> imageFormats = new ArrayList<>();
-        for (Format format : Format.values()) {
-            if (format.getType() != null &&
-                    format.getType().equals(Format.Type.IMAGE)) {
-                imageFormats.add(format);
-            }
-        }
-        Collections.sort(imageFormats, new SourceFormatComparator());
+        List<Format> imageFormats = Arrays.stream(Format.values()).
+                filter(f -> Format.Type.IMAGE.equals(f.getType()) && !Format.DCM.equals(f)).
+                sorted(Comparator.comparing(Format::getName)).
+                collect(Collectors.toList());
         vars.put("imageSourceFormats", imageFormats);
 
         // video source formats
-        List<Format> videoFormats = new ArrayList<>();
-        for (Format format : Format.values()) {
-            if (format.getType() != null &&
-                    format.getType().equals(Format.Type.VIDEO)) {
-                videoFormats.add(format);
-            }
-        }
-        Collections.sort(videoFormats, new SourceFormatComparator());
+        List<Format> videoFormats = Arrays.stream(Format.values()).
+                filter(f -> Format.Type.VIDEO.equals(f.getType())).
+                sorted(Comparator.comparing(Format::getName)).
+                collect(Collectors.toList());
         vars.put("videoSourceFormats", videoFormats);
 
         // source format assignments
         vars.put("sourceFormats", Format.values());
 
-        List<ProcessorProxy> sortedProcessorProxies = new ArrayList<>();
-        for (Processor proc : ProcessorFactory.getAllProcessors()) {
-            sortedProcessorProxies.add(new ProcessorProxy(proc));
-        }
+        List<ProcessorProxy> sortedProcessorProxies =
+                ProcessorFactory.getAllProcessors().stream().
+                        map(ProcessorProxy::new).
+                        sorted(Comparator.comparing(ObjectProxy::getName)).
+                        collect(Collectors.toList());
 
-        Collections.sort(sortedProcessorProxies, new ObjectProxyComparator());
+        // warnings
+        vars.put("anyWarnings", sortedProcessorProxies.stream().
+                anyMatch(p -> !p.getWarnings().isEmpty()));
+
         vars.put("processors", sortedProcessorProxies);
-
-        vars.put("streamProcessorRetrievalStrategy",
-                SourceImageWrangler.getStreamProcessorRetrievalStrategy());
 
         // source formats
         vars.put("scaleFilters", Scale.Filter.values());
@@ -305,12 +225,10 @@ public class AdminResource extends AbstractResource {
             // noop
         }
 
-        sortedProxies = new ArrayList<>();
-        for (Cache cache : CacheFactory.getAllSourceCaches()) {
-            sortedProxies.add(new ObjectProxy(cache));
-        }
-
-        Collections.sort(sortedProxies, new ObjectProxyComparator());
+        sortedProxies = CacheFactory.getAllSourceCaches().stream().
+                map(ObjectProxy::new).
+                sorted(Comparator.comparing(ObjectProxy::getName)).
+                collect(Collectors.toList());
         vars.put("sourceCaches", sortedProxies);
 
         // derivative caches
@@ -321,12 +239,10 @@ public class AdminResource extends AbstractResource {
             // noop
         }
 
-        sortedProxies = new ArrayList<>();
-        for (Cache cache : CacheFactory.getAllDerivativeCaches()) {
-            sortedProxies.add(new ObjectProxy(cache));
-        }
-
-        Collections.sort(sortedProxies, new ObjectProxyComparator());
+        sortedProxies = CacheFactory.getAllDerivativeCaches().stream().
+                map(ObjectProxy::new).
+                sorted(Comparator.comparing(ObjectProxy::getName)).
+                collect(Collectors.toList());
         vars.put("derivativeCaches", sortedProxies);
 
         ////////////////////////////////////////////////////////////////////

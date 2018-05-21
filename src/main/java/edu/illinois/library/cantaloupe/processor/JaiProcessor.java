@@ -1,13 +1,13 @@
 package edu.illinois.library.cantaloupe.processor;
 
-import edu.illinois.library.cantaloupe.config.ConfigurationException;
 import edu.illinois.library.cantaloupe.image.Info;
 import edu.illinois.library.cantaloupe.operation.ColorTransform;
 import edu.illinois.library.cantaloupe.image.Format;
+import edu.illinois.library.cantaloupe.image.Orientation;
+import edu.illinois.library.cantaloupe.operation.Encode;
 import edu.illinois.library.cantaloupe.operation.Normalize;
 import edu.illinois.library.cantaloupe.operation.Operation;
 import edu.illinois.library.cantaloupe.operation.OperationList;
-import edu.illinois.library.cantaloupe.operation.Orientation;
 import edu.illinois.library.cantaloupe.operation.ReductionFactor;
 import edu.illinois.library.cantaloupe.operation.Rotate;
 import edu.illinois.library.cantaloupe.operation.Scale;
@@ -16,8 +16,10 @@ import edu.illinois.library.cantaloupe.operation.Sharpen;
 import edu.illinois.library.cantaloupe.operation.Transpose;
 import edu.illinois.library.cantaloupe.operation.overlay.Overlay;
 import edu.illinois.library.cantaloupe.image.Compression;
-import edu.illinois.library.cantaloupe.processor.imageio.ImageReader;
-import edu.illinois.library.cantaloupe.processor.imageio.ImageWriter;
+import edu.illinois.library.cantaloupe.processor.codec.ImageReader;
+import edu.illinois.library.cantaloupe.processor.codec.ImageWriter;
+import edu.illinois.library.cantaloupe.processor.codec.ImageWriterFactory;
+import edu.illinois.library.cantaloupe.processor.codec.ReaderHint;
 import edu.illinois.library.cantaloupe.resource.iiif.ProcessorFeature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,8 +31,8 @@ import java.awt.image.BufferedImage;
 import java.awt.image.RenderedImage;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.util.Arrays;
-import java.util.HashSet;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.Set;
 
 /**
@@ -40,75 +42,92 @@ import java.util.Set;
  * {@link Java2dProcessor} and so common functionality has been extracted into
  * a base class.</p>
  *
+ * @deprecated Since version 4.0.
  * @see <a href="http://docs.oracle.com/cd/E19957-01/806-5413-10/806-5413-10.pdf">
  *     Programming in Java Advanced Imaging</a>
  */
+@Deprecated
 class JaiProcessor extends AbstractImageIOProcessor
         implements FileProcessor, StreamProcessor {
 
-    private static Logger logger = LoggerFactory.getLogger(JaiProcessor.class);
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(JaiProcessor.class);
 
     private static final Set<ProcessorFeature> SUPPORTED_FEATURES =
-            new HashSet<>();
-    private static final Set<edu.illinois.library.cantaloupe.resource.iiif.v1.Quality>
-            SUPPORTED_IIIF_1_1_QUALITIES = new HashSet<>();
-    private static final Set<edu.illinois.library.cantaloupe.resource.iiif.v2.Quality>
-            SUPPORTED_IIIF_2_0_QUALITIES = new HashSet<>();
+            Collections.unmodifiableSet(EnumSet.of(
+                    ProcessorFeature.MIRRORING,
+                    ProcessorFeature.REGION_BY_PERCENT,
+                    ProcessorFeature.REGION_BY_PIXELS,
+                    ProcessorFeature.REGION_SQUARE,
+                    ProcessorFeature.ROTATION_ARBITRARY,
+                    ProcessorFeature.ROTATION_BY_90S,
+                    ProcessorFeature.SIZE_ABOVE_FULL,
+                    ProcessorFeature.SIZE_BY_DISTORTED_WIDTH_HEIGHT,
+                    ProcessorFeature.SIZE_BY_FORCED_WIDTH_HEIGHT,
+                    ProcessorFeature.SIZE_BY_HEIGHT,
+                    ProcessorFeature.SIZE_BY_PERCENT,
+                    ProcessorFeature.SIZE_BY_WIDTH,
+                    ProcessorFeature.SIZE_BY_WIDTH_HEIGHT));
 
-    static {
-        SUPPORTED_IIIF_1_1_QUALITIES.addAll(Arrays.asList(
-                edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.BITONAL,
-                edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.COLOR,
-                edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.GRAY,
-                edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.NATIVE));
-        SUPPORTED_IIIF_2_0_QUALITIES.addAll(Arrays.asList(
-                edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.BITONAL,
-                edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.COLOR,
-                edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.DEFAULT,
-                edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.GRAY));
-        SUPPORTED_FEATURES.addAll(Arrays.asList(
-                ProcessorFeature.MIRRORING,
-                ProcessorFeature.REGION_BY_PERCENT,
-                ProcessorFeature.REGION_BY_PIXELS,
-                ProcessorFeature.REGION_SQUARE,
-                ProcessorFeature.ROTATION_ARBITRARY,
-                ProcessorFeature.ROTATION_BY_90S,
-                ProcessorFeature.SIZE_ABOVE_FULL,
-                ProcessorFeature.SIZE_BY_DISTORTED_WIDTH_HEIGHT,
-                ProcessorFeature.SIZE_BY_FORCED_WIDTH_HEIGHT,
-                ProcessorFeature.SIZE_BY_HEIGHT,
-                ProcessorFeature.SIZE_BY_PERCENT,
-                ProcessorFeature.SIZE_BY_WIDTH,
-                ProcessorFeature.SIZE_BY_WIDTH_HEIGHT));
+    private static final Set<edu.illinois.library.cantaloupe.resource.iiif.v1.Quality>
+            SUPPORTED_IIIF_1_1_QUALITIES = Collections.unmodifiableSet(EnumSet.of(
+                    edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.BITONAL,
+                    edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.COLOR,
+                    edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.GRAY,
+                    edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.NATIVE));
+
+    private static final Set<edu.illinois.library.cantaloupe.resource.iiif.v2.Quality>
+            SUPPORTED_IIIF_2_0_QUALITIES = Collections.unmodifiableSet(EnumSet.of(
+                    edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.BITONAL,
+                    edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.COLOR,
+                    edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.DEFAULT,
+                    edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.GRAY));
+
+    /**
+     * Override that disables support for GIF source images.
+     */
+    @Override
+    public Set<Format> getAvailableOutputFormats() {
+        Set<Format> formats;
+        if (Format.GIF.equals(sourceFormat)) {
+            formats = Collections.emptySet();
+        } else {
+            formats = super.getAvailableOutputFormats();
+        }
+        return formats;
     }
 
     @Override
     public Set<ProcessorFeature> getSupportedFeatures() {
-        Set<ProcessorFeature> features = new HashSet<>();
-        if (getAvailableOutputFormats().size() > 0) {
-            features.addAll(SUPPORTED_FEATURES);
+        Set<ProcessorFeature> features;
+        if (!getAvailableOutputFormats().isEmpty()) {
+            features = SUPPORTED_FEATURES;
+        } else {
+            features = Collections.unmodifiableSet(Collections.emptySet());
         }
         return features;
     }
 
     @Override
     public Set<edu.illinois.library.cantaloupe.resource.iiif.v1.Quality>
-    getSupportedIiif1_1Qualities() {
-        Set<edu.illinois.library.cantaloupe.resource.iiif.v1.Quality>
-                qualities = new HashSet<>();
-        if (getAvailableOutputFormats().size() > 0) {
-            qualities.addAll(SUPPORTED_IIIF_1_1_QUALITIES);
+    getSupportedIIIF1Qualities() {
+        Set<edu.illinois.library.cantaloupe.resource.iiif.v1.Quality> qualities;
+        if (!getAvailableOutputFormats().isEmpty()) {
+            qualities = SUPPORTED_IIIF_1_1_QUALITIES;
+        } else {
+            qualities = Collections.unmodifiableSet(Collections.emptySet());
         }
         return qualities;
     }
 
     @Override
     public Set<edu.illinois.library.cantaloupe.resource.iiif.v2.Quality>
-    getSupportedIiif2_0Qualities() {
-        Set<edu.illinois.library.cantaloupe.resource.iiif.v2.Quality>
-                qualities = new HashSet<>();
-        if (getAvailableOutputFormats().size() > 0) {
-            qualities.addAll(SUPPORTED_IIIF_2_0_QUALITIES);
+    getSupportedIIIF2Qualities() {
+        Set<edu.illinois.library.cantaloupe.resource.iiif.v2.Quality> qualities;
+        if (!getAvailableOutputFormats().isEmpty()) {
+            qualities = SUPPORTED_IIIF_2_0_QUALITIES;
+        } else {
+            qualities = Collections.unmodifiableSet(Collections.emptySet());
         }
         return qualities;
     }
@@ -120,19 +139,22 @@ class JaiProcessor extends AbstractImageIOProcessor
             throws ProcessorException {
         super.process(opList, imageInfo, outputStream);
 
-        final ImageReader reader = getReader();
+        ImageReader reader = null;
         try {
+            reader = getReader();
+            final Format outputFormat = opList.getOutputFormat();
             final Orientation orientation = getEffectiveOrientation();
             final Dimension fullSize = imageInfo.getSize();
             final ReductionFactor rf = new ReductionFactor();
-            final Set<ImageReader.Hint> hints = new HashSet<>();
+            final Set<ReaderHint> hints =
+                    EnumSet.noneOf(ReaderHint.class);
 
             final boolean normalize = (opList.getFirst(Normalize.class) != null);
             if (normalize) {
                 // When normalizing, the reader needs to read the entire image
                 // so that its histogram can be sampled accurately. This will
                 // preserve the luminance across tiles.
-                hints.add(ImageReader.Hint.IGNORE_CROP);
+                hints.add(ReaderHint.IGNORE_CROP);
             }
 
             final RenderedImage renderedImage = reader.readRendered(opList,
@@ -144,8 +166,19 @@ class JaiProcessor extends AbstractImageIOProcessor
             if (normalize) {
                 renderedOp = JAIUtil.stretchContrast(renderedOp);
             }
-            renderedOp = JAIUtil.rescalePixels(renderedOp);
-            renderedOp = JAIUtil.convertTo8Bits(renderedOp);
+
+            // If the Encode specifies a max sample size of 8 bits, or if the
+            // output format's max sample size is 8 bits, we will need to
+            // reduce it. HOWEVER, if the output format's max sample size is
+            // LESS THAN 8 bits (I'm looking at you, GIF), don't do anything
+            // and let the writer handle it.
+            Encode encode = (Encode) opList.getFirst(Encode.class);
+            if (((encode != null && encode.getMaxComponentSize() <= 8)
+                    || outputFormat.getMaxSampleSize() <= 8)
+                    && !Format.GIF.equals(outputFormat)) {
+                renderedOp = JAIUtil.rescalePixels(renderedOp);
+                renderedOp = JAIUtil.reduceTo8Bits(renderedOp);
+            }
 
             for (Operation op : opList) {
                 if (op.hasEffect(fullSize, opList)) {
@@ -169,10 +202,10 @@ class JaiProcessor extends AbstractImageIOProcessor
                            better than nothing.
                         2) otherwise, use the SubsampleAverage operation.
                         */
-                        if (getSourceFormat().equals(Format.TIF) &&
+                        if (sourceFormat.equals(Format.TIF) &&
                                 (!reader.getCompression(0).equals(Compression.UNCOMPRESSED) &&
                                         !reader.getCompression(0).equals(Compression.UNDEFINED))) {
-                            logger.debug("process(): detected compressed TIFF; " +
+                            LOGGER.debug("process(): detected compressed TIFF; " +
                                     "using the Scale operation with nearest-" +
                                     "neighbor interpolation.");
                             renderedOp = JAIUtil.scaleImage(renderedOp, (Scale) op,
@@ -196,9 +229,7 @@ class JaiProcessor extends AbstractImageIOProcessor
                         renderedOp = JAIUtil.
                                 transposeImage(renderedOp, (Transpose) op);
                     } else if (op instanceof Rotate) {
-                        Rotate rotate = (Rotate) op;
-                        rotate.addDegrees(orientation.getDegrees());
-                        renderedOp = JAIUtil.rotateImage(renderedOp, rotate);
+                        renderedOp = JAIUtil.rotateImage(renderedOp, (Rotate) op);
                     } else if (op instanceof ColorTransform) {
                         renderedOp = JAIUtil.
                                 transformColor(renderedOp, (ColorTransform) op);
@@ -218,26 +249,23 @@ class JaiProcessor extends AbstractImageIOProcessor
                     // this, and doing it in JAI is harder (or impossible in
                     // the case of drawing text).
                     image = renderedOp.getAsBufferedImage();
-                    try {
-                        image = Java2DUtil.applyOverlay(image,
-                                (Overlay) op);
-                    } catch (ConfigurationException e) {
-                        logger.error(e.getMessage());
-                    }
+                    Java2DUtil.applyOverlay(image, (Overlay) op);
                 }
             }
-            final ImageWriter writer = new ImageWriter(opList,
-                    reader.getMetadata(0));
+            final ImageWriter writer = new ImageWriterFactory().newImageWriter(
+                    opList, reader.getMetadata(0));
 
             if (image != null) {
-                writer.write(image, opList.getOutputFormat(), outputStream);
+                writer.write(image, outputStream);
             } else {
-                writer.write(renderedOp, opList.getOutputFormat(), outputStream);
+                writer.write(renderedOp, outputStream);
             }
         } catch (IOException e) {
             throw new ProcessorException(e.getMessage(), e);
         } finally {
-            reader.dispose();
+            if (reader != null) {
+                reader.dispose();
+            }
         }
     }
 

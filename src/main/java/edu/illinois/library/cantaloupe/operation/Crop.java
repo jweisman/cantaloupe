@@ -1,9 +1,11 @@
 package edu.illinois.library.cantaloupe.operation;
 
+import edu.illinois.library.cantaloupe.image.Orientation;
 import edu.illinois.library.cantaloupe.util.StringUtil;
 
 import java.awt.Dimension;
 import java.awt.Rectangle;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -24,12 +26,24 @@ public class Crop implements Operation {
     }
 
     private float height = 0.0f;
+    private boolean isFrozen = false;
     private boolean isFull = false;
     private Shape shape = Shape.ARBITRARY;
     private Unit unit = Unit.PIXELS;
     private float width = 0.0f;
     private float x = 0.0f;
     private float y = 0.0f;
+
+    private void checkFrozen() {
+        if (isFrozen) {
+            throw new IllegalStateException("Instance is frozen.");
+        }
+    }
+
+    @Override
+    public void freeze() {
+        isFrozen = true;
+    }
 
     /**
      * @param rect Rectangle to imitate.
@@ -79,9 +93,11 @@ public class Crop implements Operation {
      *
      * @param orientation Orientation of the image. If <code>null</code>, the
      *                    invocation will be a no-op.
-     * @param fullSize Dimensions of the un-rotated image.
+     * @param fullSize    Dimensions of the un-rotated image.
+     * @throws IllegalStateException If the instance is frozen.
      */
     public void applyOrientation(Orientation orientation, Dimension fullSize) {
+        checkFrozen();
         if (orientation == null) {
             return;
         }
@@ -117,6 +133,17 @@ public class Crop implements Operation {
         }
     }
 
+    @Override
+    public boolean equals(Object obj) {
+        if (obj == this) {
+            return true;
+        }
+        if (obj instanceof Crop) {
+            return obj.toString().equals(toString());
+        }
+        return super.equals(obj);
+    }
+
     /**
      * @return The height of the operation. If {@link #getUnit()} returns
      * {@link Unit#PERCENT}, this will be a percentage of the full image height
@@ -140,13 +167,18 @@ public class Crop implements Operation {
      * @param rf Factor by which the image has been reduced.
      * @return Crop coordinates relative to the given full-sized image
      *         dimensions.
+     * @throws IllegalArgumentException if {@literal imageSize} is {@literal
+     *         null}.
      */
     public Rectangle getRectangle(Dimension imageSize, ReductionFactor rf) {
+        if (imageSize == null) {
+            throw new IllegalArgumentException("imageSize is null");
+        }
         final double scale = rf.getScale();
-        final double regionX = this.getX() * scale;
-        final double regionY = this.getY() * scale;
-        final double regionWidth = this.getWidth() * scale;
-        final double regionHeight = this.getHeight() * scale;
+        final double regionX = getX() * scale;
+        final double regionY = getY() * scale;
+        final double regionWidth = getWidth() * scale;
+        final double regionHeight = getHeight() * scale;
 
         int x, y, requestedWidth, requestedHeight, croppedWidth,
                 croppedHeight;
@@ -195,8 +227,8 @@ public class Crop implements Operation {
 
     /**
      * @return The width of the operation. If {@link #getUnit()} returns
-     * {@link Unit#PERCENT}, this will be a percentage of the full image width
-     * between 0 and 1.
+     *         {@link Unit#PERCENT}, this will be a percentage of the full
+     *         image width between 0 and 1.
      */
     public float getWidth() {
         return width;
@@ -213,8 +245,8 @@ public class Crop implements Operation {
 
     /**
      * @return The top bounding coordinate of the operation. If
-     * {@link #getUnit()} returns {@link Unit#PERCENT}, this will be a
-     * percentage of the full image height between 0 and 1.
+     *         {@link #getUnit()} returns {@link Unit#PERCENT}, this will be a
+     *         percentage of the full image height between 0 and 1.
      */
     public float getY() {
         return y;
@@ -222,10 +254,10 @@ public class Crop implements Operation {
 
     /**
      * @return Whether the crop specifies the full source area, i.e. whether it
-     * is effectively a no-op.
+     *         is effectively a no-op.
      */
     public boolean isFull() {
-        return this.isFull;
+        return isFull;
     }
 
     /**
@@ -235,9 +267,9 @@ public class Crop implements Operation {
     public boolean hasEffect() {
         if (this.isFull()) {
             return false;
-        } else if (Unit.PERCENT.equals(this.getUnit()) &&
-                Math.abs(this.getWidth() - 1f) < 0.000001f &&
-                Math.abs(this.getHeight() - 1f) < 0.000001f) {
+        } else if (Unit.PERCENT.equals(getUnit()) &&
+                Math.abs(getWidth() - 1f) < 0.000001f &&
+                Math.abs(getHeight() - 1f) < 0.000001f) {
             return false;
         }
         return true;
@@ -250,61 +282,115 @@ public class Crop implements Operation {
      */
     @Override
     public boolean hasEffect(Dimension fullSize, OperationList opList) {
-        if (!hasEffect()) {
+        if (!hasEffect() && !Unit.PERCENT.equals(getUnit())) {
             return false;
-        }
-        if (Shape.SQUARE.equals(getShape()) &&
+        } else if (Shape.SQUARE.equals(getShape()) &&
                 fullSize.width != fullSize.height) {
             return true;
+        } else if (Unit.PIXELS.equals(getUnit())) {
+            if (Math.abs(fullSize.width - getWidth()) > 0.00001f ||
+                    Math.abs(fullSize.height - getHeight()) > 0.00001f) {
+                return true;
+            } else if (getX() > 0 || getY() > 0) {
+                return true;
+            }
+        } else if (Unit.PERCENT.equals(getUnit())) {
+            final float delta = 0.00001f;
+            return getX() > delta || getY() > delta ||
+                    Math.abs((getWidth() * fullSize.width) -
+                            (getX() * fullSize.width) - fullSize.width) > delta ||
+                    Math.abs((getHeight() * fullSize.height) -
+                            (getY() * fullSize.height) - fullSize.height) > delta;
         }
-        return !(Unit.PIXELS.equals(getUnit()) &&
-                fullSize.width == Math.round(getWidth()) &&
-                fullSize.height == Math.round(getHeight()));
+        return false;
+    }
+
+    @Override
+    public int hashCode() {
+        return toString().hashCode();
     }
 
     public void setFull(boolean isFull) {
         this.isFull = isFull;
     }
 
-    public void setHeight(float height) throws IllegalArgumentException {
+    /**
+     * @param height Height to set.
+     * @throws IllegalArgumentException If the given height is invalid.
+     * @throws IllegalStateException    If the instance is frozen.
+     */
+    public void setHeight(float height) {
+        checkFrozen();
         if (height <= 0) {
             throw new IllegalArgumentException("Height must be a positive integer");
-        } else if (this.getUnit().equals(Unit.PERCENT) && height > 1) {
+        }
+        if (Unit.PERCENT.equals(getUnit()) && height > 1) {
             throw new IllegalArgumentException("Height percentage must be <= 1");
         }
         this.height = height;
     }
 
+    /**
+     * @param shape Shape to set.
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setShape(Shape shape) {
+        checkFrozen();
         this.shape = shape;
     }
 
+    /**
+     * @param unit Unit to set.
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setUnit(Unit unit) {
+        checkFrozen();
         this.unit = unit;
     }
 
-    public void setWidth(float width) throws IllegalArgumentException {
+    /**
+     * @param width Width to set.
+     * @throws IllegalArgumentException If the given width is invalid.
+     * @throws IllegalStateException If the instance is frozen.
+     */
+    public void setWidth(float width) {
+        checkFrozen();
         if (width <= 0) {
             throw new IllegalArgumentException("Width must be a positive integer");
-        } else if (this.getUnit().equals(Unit.PERCENT) && width > 1) {
+        }
+        if (Unit.PERCENT.equals(getUnit()) && width > 1) {
             throw new IllegalArgumentException("Width percentage must be <= 1");
         }
         this.width = width;
     }
 
-    public void setX(float x) throws IllegalArgumentException {
+    /**
+     * @param x X coordinate to set.
+     * @throws IllegalArgumentException If the given X coordinate is invalid.
+     * @throws IllegalStateException If the instance is frozen.
+     */
+    public void setX(float x) {
+        checkFrozen();
         if (x < 0) {
             throw new IllegalArgumentException("X must be a positive float");
-        } else if (this.getUnit().equals(Unit.PERCENT) && x > 1) {
+        }
+        if (Unit.PERCENT.equals(getUnit()) && x > 1) {
             throw new IllegalArgumentException("X percentage must be <= 1");
         }
         this.x = x;
     }
 
-    public void setY(float y) throws IllegalArgumentException {
+    /**
+     * @param y Y coordinate to set.
+     * @throws IllegalArgumentException If the given Y coordinate is invalid.
+     * @throws IllegalStateException If the instance is frozen.
+     */
+    public void setY(float y) {
+        checkFrozen();
         if (y < 0) {
             throw new IllegalArgumentException("Y must be a positive float");
-        } else if (this.getUnit().equals(Unit.PERCENT) && y > 1) {
+        }
+        if (Unit.PERCENT.equals(getUnit()) && y > 1) {
             throw new IllegalArgumentException("Y percentage must be <= 1");
         }
         this.y = y;
@@ -320,13 +406,13 @@ public class Crop implements Operation {
     @Override
     public Map<String,Object> toMap(Dimension fullSize) {
         final Rectangle rect = getRectangle(fullSize);
-        final HashMap<String,Object> map = new HashMap<>();
+        final Map<String,Object> map = new HashMap<>();
         map.put("class", getClass().getSimpleName());
         map.put("x", rect.x);
         map.put("y", rect.y);
         map.put("width", rect.width);
         map.put("height", rect.height);
-        return map;
+        return Collections.unmodifiableMap(map);
     }
 
     /**
@@ -379,11 +465,11 @@ public class Crop implements Operation {
      * {@inheritDoc}
      */
     @Override
-    public void validate(Dimension fullSize) throws ValidationException {
+    public void validate(Dimension fullSize) {
         if (!isFull()) {
             Dimension resultingSize = getResultingSize(fullSize);
             if (resultingSize.width < 1 || resultingSize.height < 1) {
-                throw new ValidationException(
+                throw new IllegalArgumentException(
                         "Crop area is outside the bounds of the source image.");
             }
         }

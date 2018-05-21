@@ -1,45 +1,40 @@
 package edu.illinois.library.cantaloupe.resource.iiif.v2;
 
-import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.image.Identifier;
+import edu.illinois.library.cantaloupe.operation.Encode;
 import edu.illinois.library.cantaloupe.operation.OperationList;
-import edu.illinois.library.cantaloupe.resource.ParameterList;
+import edu.illinois.library.cantaloupe.processor.UnsupportedOutputFormatException;
+import edu.illinois.library.cantaloupe.resource.IllegalClientArgumentException;
 import org.apache.commons.lang3.StringUtils;
 import org.restlet.data.Reference;
 import org.restlet.data.Form;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.awt.Dimension;
 import java.io.IOException;
-import java.net.URL;
-import java.util.Map;
 
 /**
- * Encapsulates the parameters of an IIIF request.
+ * Encapsulates the parameters of a request.
  *
  * @see <a href="http://iiif.io/api/request/2.0/#request-request-parameters">IIIF
  *      Image API 2.0</a>
+ * @see <a href="http://iiif.io/api/request/2.1/#request-request-parameters">IIIF
+ *      Image API 2.1</a>
  */
-class Parameters implements ParameterList, Comparable<Parameters> {
+class Parameters {
 
-    private static Logger logger = LoggerFactory.getLogger(Parameters.class);
-
-    private Format outputFormat;
     private Identifier identifier;
-    private Quality quality;
-    private Form query = new Form();
     private Region region;
-    private Rotation rotation;
     private Size size;
+    private Rotation rotation;
+    private Quality quality;
+    private OutputFormat outputFormat;
+    private Form query = new Form();
 
     /**
-     * @param paramsStr URI path fragment beginning from the identifier onward
-     * @throws IllegalArgumentException if the <code>params</code> is not in
-     * the correct format
+     * @param paramsStr URI path fragment beginning from the identifier onward.
+     * @throws IllegalClientArgumentException if the argument is not in the
+     *         correct format.
      */
-    public static Parameters fromUri(String paramsStr)
-            throws IllegalArgumentException {
+    public static Parameters fromUri(String paramsStr) {
         Parameters params = new Parameters();
         String[] parts = StringUtils.split(paramsStr, "/");
         if (parts.length == 5) {
@@ -50,12 +45,12 @@ class Parameters implements ParameterList, Comparable<Parameters> {
             String[] subparts = StringUtils.split(parts[4], ".");
             if (subparts.length == 2) {
                 params.setQuality(Quality.valueOf(subparts[0].toUpperCase()));
-                params.setOutputFormat(Format.valueOf(subparts[1].toUpperCase()));
+                params.setOutputFormat(OutputFormat.valueOf(subparts[1].toUpperCase()));
             } else {
-                throw new IllegalArgumentException("Invalid parameters format");
+                throw new IllegalClientArgumentException("Invalid parameters format");
             }
         } else {
-            throw new IllegalArgumentException("Invalid parameters format");
+            throw new IllegalClientArgumentException("Invalid parameters format");
         }
         return params;
     }
@@ -65,35 +60,55 @@ class Parameters implements ParameterList, Comparable<Parameters> {
      */
     public Parameters() {}
 
-     /**
-     * @param identifier From URI
+    /**
+     * @param identifier Decoded identifier.
      * @param region From URI
      * @param size From URI
      * @param rotation From URI
      * @param quality From URI
      * @param format From URI
+     * @throws UnsupportedOutputFormatException if the {@literal format}
+     *         argument is invalid.
+     * @throws IllegalClientArgumentException if any of the other arguments are
+     *         invalid.
      */
-    public Parameters(String identifier, String region, String size,
-                      String rotation, String quality, String format) {
-        this.identifier = new Identifier(Reference.decode(identifier));
-        this.outputFormat = Format.valueOf(format.toUpperCase());
-        this.quality = Quality.valueOf(quality.toUpperCase());
-        this.region = Region.fromUri(region);
-        this.rotation = Rotation.fromUri(rotation);
-        this.size = Size.fromUri(size);
+    public Parameters(Identifier identifier,
+                      String region,
+                      String size,
+                      String rotation,
+                      String quality,
+                      String format) {
+        setIdentifier(identifier);
+        setRegion(Region.fromUri(region));
+        setSize(Size.fromUri(size));
+        setRotation(Rotation.fromUri(rotation));
+        try {
+            setQuality(Quality.valueOf(quality.toUpperCase()));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalClientArgumentException(e.getMessage(), e);
+        }
+        try {
+            setOutputFormat(OutputFormat.valueOf(format.toUpperCase()));
+        } catch (IllegalArgumentException e) {
+            throw new UnsupportedOutputFormatException(format);
+        }
     }
 
     @Override
-    public int compareTo(Parameters params) {
-        int last = this.toString().compareTo(params.toString());
-        return (last == 0) ? this.toString().compareTo(params.toString()) : last;
+    public boolean equals(Object obj) {
+        if (obj == this) {
+            return true;
+        } else if (obj instanceof Parameters) {
+            return obj.toString().equals(toString());
+        }
+        return super.equals(obj);
     }
 
     public Identifier getIdentifier() {
         return identifier;
     }
 
-    public Format getOutputFormat() {
+    public OutputFormat getOutputFormat() {
         return outputFormat;
     }
 
@@ -102,9 +117,9 @@ class Parameters implements ParameterList, Comparable<Parameters> {
     }
 
     /**
-     * @return The URL query. This enables processors to support options and
-     * operations not available in the parameters. Query keys and values are
-     * unsanitized.
+     * @return The URI query. This enables processors to support options and
+     *         operations not available in the parameters. Query keys and
+     *         values are not sanitized.
      */
     public Form getQuery() {
         return query;
@@ -122,11 +137,16 @@ class Parameters implements ParameterList, Comparable<Parameters> {
         return size;
     }
 
+    @Override
+    public int hashCode() {
+        return toString().hashCode();
+    }
+
     public void setIdentifier(Identifier identifier) {
         this.identifier = identifier;
     }
 
-    public void setOutputFormat(Format outputFormat) {
+    public void setOutputFormat(OutputFormat outputFormat) {
         this.outputFormat = outputFormat;
     }
 
@@ -151,13 +171,13 @@ class Parameters implements ParameterList, Comparable<Parameters> {
     }
 
     /**
-     * {@inheritDoc}
+     * @return Analog of the request parameters for processing, excluding any
+     *         additional operations that may need to be performed, such as
+     *         overlays, etc.
      */
-    @Override
-    public OperationList toOperationList() {
-        OperationList ops = new OperationList();
-        ops.setIdentifier(getIdentifier());
-        ops.setOutputFormat(getOutputFormat());
+    OperationList toOperationList() {
+        OperationList ops = new OperationList(getIdentifier());
+
         if (!Region.Type.FULL.equals(getRegion().getType())) {
             ops.add(getRegion().toCrop());
         }
@@ -169,11 +189,13 @@ class Parameters implements ParameterList, Comparable<Parameters> {
             ops.add(getRotation().toRotate());
         }
         ops.add(getQuality().toColorTransform());
+        ops.add(new Encode(getOutputFormat().toFormat()));
+
         return ops;
     }
 
     /**
-     * @return IIIF URI parameters with no leading slash.
+     * @return URI parameters with no leading slash.
      */
     public String toString() {
         String str = String.format("%s/%s/%s/%s/%s.%s", getIdentifier(),
@@ -183,7 +205,7 @@ class Parameters implements ParameterList, Comparable<Parameters> {
             try {
                 str += "?" + this.getQuery().encode();
             } catch (IOException e) {
-                logger.error("Failed to encode query: {}", this.getQuery());
+                throw new IllegalClientArgumentException(e.getMessage(), e);
             }
         }
         return str;

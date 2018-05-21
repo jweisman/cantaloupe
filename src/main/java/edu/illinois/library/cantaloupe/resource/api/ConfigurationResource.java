@@ -7,51 +7,47 @@ import org.restlet.representation.EmptyRepresentation;
 import org.restlet.representation.Representation;
 import org.restlet.resource.Get;
 import org.restlet.resource.Put;
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.Map;
 
-public class ConfigurationResource extends APIResource {
+public class ConfigurationResource extends AbstractAPIResource {
 
-    private static org.slf4j.Logger logger = LoggerFactory.
+    private static final Logger LOGGER = LoggerFactory.
             getLogger(ConfigurationResource.class);
 
     /**
-     * @throws Exception
+     * @return JSON application configuration. <strong>This may contain
+     *         sensitive info and must be protected.</strong>
      */
     @Get("json")
     public Representation getConfiguration() throws Exception {
-        final Configuration config = Configuration.getInstance();
-
-        final Map<String,Object> map = new LinkedHashMap<>();
-        final Iterator<String> keys = config.getKeys();
-        while (keys.hasNext()) {
-            final String key = keys.next();
-            map.put(key, config.getProperty(key));
-        }
-        return new JSONRepresentation(map);
+        Configuration config = Configuration.getInstance();
+        return new JSONRepresentation(config.toMap());
     }
 
     /**
-     * @param rep PUTted JSON configuration
-     * @throws Exception
+     * Deserializes submitted JSON data and updates the application
+     * configuration instance with it.
      */
     @Put("json")
-    public Representation putConfiguration(Representation rep) throws Exception {
+    public Representation putConfiguration(Representation rep)
+            throws IOException {
         final Configuration config = Configuration.getInstance();
-        final Map submittedConfig = new ObjectMapper().readValue(
+        final Map<?, ?> submittedConfig = new ObjectMapper().readValue(
                 rep.getStream(), HashMap.class);
+
+        LOGGER.info("Updating {} configuration keys", submittedConfig.size());
 
         // Copy configuration keys and values from the request JSON payload to
         // the application configuration.
         for (final Object key : submittedConfig.keySet()) {
-            final Object value = submittedConfig.get(key);
-            logger.debug("Setting {} = {}", key, value);
-            config.setProperty((String) key, value);
+            config.setProperty((String) key, submittedConfig.get(key));
         }
+
         config.save();
 
         return new EmptyRepresentation();

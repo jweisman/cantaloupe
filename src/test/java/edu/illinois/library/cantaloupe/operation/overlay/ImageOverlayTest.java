@@ -11,7 +11,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URL;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.Map;
 
 import static org.junit.Assert.*;
@@ -21,21 +22,10 @@ public class ImageOverlayTest extends BaseTest {
     private ImageOverlay instance;
 
     @Before
-    public void setUp() throws IOException {
-        instance = new ImageOverlay(TestUtil.getImage("jpg"),
-                Position.BOTTOM_RIGHT, 5);
+    public void setUp() throws Exception {
+        URI imageURI = TestUtil.getImage("jpg").toUri();
+        instance = new ImageOverlay(imageURI, Position.BOTTOM_RIGHT, 5);
     }
-
-    // getIdentifier()
-
-    @Test
-    public void testGetIdentifier() throws Exception {
-        assertEquals("jpg", instance.getIdentifier());
-        instance.setURL(new URL("http://example.org/dogs"));
-        assertEquals("dogs", instance.getIdentifier());
-    }
-
-    // openStream()
 
     @Test
     public void testOpenStream() throws IOException {
@@ -45,19 +35,22 @@ public class ImageOverlayTest extends BaseTest {
         assertEquals(5439, os.toByteArray().length);
     }
 
-    @Test
+    @Test(expected = IOException.class)
     public void testOpenStreamWithNonexistentImage() throws IOException {
-        instance = new ImageOverlay(new File("/dev/cats"),
+        instance = new ImageOverlay(new File("/dev/cats").toURI(),
                 Position.BOTTOM_RIGHT, 5);
-        try {
-            instance.openStream();
-            fail("Expected exception");
-        } catch (IOException e) {
-            // pass
-        }
+        instance.openStream();
     }
 
-    // toMap()
+    @Test(expected = IllegalStateException.class)
+    public void testSetURIThrowsExceptionWhenFrozen() {
+        instance.freeze();
+        try {
+            instance.setURI(new URI("http://example.org/cats"));
+        } catch (URISyntaxException e) {
+            fail();
+        }
+    }
 
     @Test
     public void testToMap() {
@@ -65,17 +58,23 @@ public class ImageOverlayTest extends BaseTest {
 
         Map<String,Object> map = instance.toMap(fullSize);
         assertEquals(instance.getClass().getSimpleName(), map.get("class"));
-        assertEquals(instance.getIdentifier(), map.get("filename"));
+        assertEquals(instance.getURI().toString(), map.get("uri"));
         assertEquals(instance.getInset(), map.get("inset"));
         assertEquals(instance.getPosition().toString(), map.get("position"));
     }
 
-    // toString()
+    @Test(expected = UnsupportedOperationException.class)
+    public void testToMapReturnsUnmodifiableMap() {
+        Dimension fullSize = new Dimension(100, 100);
+        Map<String,Object> map = instance.toMap(fullSize);
+        map.put("test", "test");
+    }
 
     @Test
     public void testToString() throws IOException {
-        instance.setFile(TestUtil.getImage("jpg"));
-        assertEquals("jpg_SE_5", instance.toString());
+        URI uri = TestUtil.getImage("jpg").toUri();
+        instance.setURI(uri);
+        assertEquals(uri.toString() + "_SE_5", instance.toString());
     }
 
 }

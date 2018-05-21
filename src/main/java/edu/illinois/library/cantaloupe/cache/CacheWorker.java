@@ -3,56 +3,61 @@ package edu.illinois.library.cantaloupe.cache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+
 /**
- * Purges expired items from the cache.
+ * Purges invalid items from the cache.
  */
 class CacheWorker implements Runnable {
 
-    private static final Logger logger = LoggerFactory.
+    private static final Logger LOGGER = LoggerFactory.
             getLogger(CacheWorker.class);
+
+    private int interval;
+
+    CacheWorker(int interval) {
+        this.interval = interval;
+    }
 
     /**
      * Runs one sweep of the worker.
      */
     @Override
     public void run() {
-        // Disabled caches will be null.
-        final Cache sourceCache = CacheFactory.getSourceCache();
-        final Cache derivativeCache = CacheFactory.getDerivativeCache();
-        logger.info("Working...");
+        LOGGER.info("Working...");
+        CacheFacade cacheFacade = new CacheFacade();
 
-        if (sourceCache != null) {
-            // Purge expired items from the source cache.
-            try {
-                sourceCache.purgeExpired();
-            } catch (CacheException e) {
-                logger.error(e.getMessage());
-            }
-            // Clean up the source cache.
-            try {
-                sourceCache.cleanUp();
-            } catch (CacheException e) {
-                logger.error(e.getMessage());
-            }
-        }
-        if (derivativeCache != null) {
-            // Purge expired items from the derivative cache.
-            try {
-                derivativeCache.purgeExpired();
-            } catch (CacheException e) {
-                logger.error(e.getMessage());
-            }
-            // Clean up the derivative cache.
-            try {
-                derivativeCache.cleanUp();
-            } catch (CacheException e) {
-                logger.error(e.getMessage());
-            }
-        } else {
-            logger.info("Caching is disabled. Nothing to do.");
+        // Purge invalid content.
+        try {
+            cacheFacade.purgeExpired();
+        } catch (IOException e) {
+            LOGGER.error(e.getMessage());
         }
 
-        logger.info("Done working.");
+        // Clean up.
+        try {
+            cacheFacade.cleanUp();
+        } catch (IOException e) {
+            LOGGER.error(e.getMessage());
+        }
+
+        // If the derivative cache is HeapCache, and its persistence is
+        // enabled, dump it.
+        DerivativeCache cache = cacheFacade.getDerivativeCache();
+        if (cache != null && cache instanceof HeapCache) {
+            HeapCache heapCache = (HeapCache) cache;
+            if (heapCache.isPersistenceEnabled()) {
+                try {
+                    heapCache.dumpToPersistentStore();
+                } catch (IOException e) {
+                    LOGGER.error("Error while persisting {}: {}",
+                            HeapCache.class.getSimpleName(),
+                            e.getMessage());
+                }
+            }
+        }
+
+        LOGGER.info("Done working. Next shift starts in {} seconds.", interval);
     }
 
 }

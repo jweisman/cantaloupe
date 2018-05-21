@@ -1,6 +1,7 @@
 package edu.illinois.library.cantaloupe.operation;
 
 import java.awt.Dimension;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -13,6 +14,14 @@ import java.util.Map;
  * between EXIF, IPTC, XMP, etc.</p>
  */
 public class MetadataCopy implements Operation {
+
+    /**
+     * Does nothing.
+     */
+    @Override
+    public void freeze() {
+        // no-op
+    }
 
     /**
      * @param fullSize Full size of the source image on which the operation
@@ -52,7 +61,7 @@ public class MetadataCopy implements Operation {
     public Map<String, Object> toMap(Dimension fullSize) {
         final HashMap<String,Object> map = new HashMap<>();
         map.put("class", getClass().getSimpleName());
-        return map;
+        return Collections.unmodifiableMap(map);
     }
 
     /**

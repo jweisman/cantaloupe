@@ -1,20 +1,45 @@
 package edu.illinois.library.cantaloupe.image;
 
-import org.apache.commons.codec.binary.Hex;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.JsonSerializer;
+import com.fasterxml.jackson.databind.SerializerProvider;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
-import java.nio.charset.Charset;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import java.io.IOException;
 
 /**
- * Image-server-unique image identifier.
+ * Immutable application-unique source image identifier.
  */
+@JsonSerialize(using = Identifier.IdentifierSerializer.class)
+@JsonDeserialize(using = Identifier.IdentifierDeserializer.class)
 public class Identifier implements Comparable<Identifier> {
 
-    private static final Logger logger = LoggerFactory.
-            getLogger(Identifier.class);
+    /**
+     * Deserializes a type/subtype string into an {@link Identifier}.
+     */
+    static class IdentifierDeserializer extends JsonDeserializer<Identifier> {
+        @Override
+        public Identifier deserialize(JsonParser jsonParser,
+                                      DeserializationContext deserializationContext) throws IOException {
+            return new Identifier(jsonParser.getValueAsString());
+        }
+    }
+
+    /**
+     * Serializes an {@link Identifier} as a string.
+     */
+    static class IdentifierSerializer extends JsonSerializer<Identifier> {
+        @Override
+        public void serialize(Identifier identifier,
+                              JsonGenerator jsonGenerator,
+                              SerializerProvider serializerProvider) throws IOException {
+            jsonGenerator.writeString(identifier.toString());
+        }
+    }
 
     private String value;
 
@@ -31,50 +56,39 @@ public class Identifier implements Comparable<Identifier> {
 
     @Override
     public int compareTo(Identifier identifier) {
-        int last = this.toString().compareTo(identifier.toString());
-        return (last == 0) ?
-                this.toString().compareTo(identifier.toString()) : last;
+        return toString().compareTo(identifier.toString());
     }
 
+    /**
+     * @param obj Instance to compare.
+     * @return {@literal true} if {@literal obj} is a reference to the same
+     *         instance; {@literal true} if it is a different instance with the
+     *         same value; {@literal true} if it is a {@link String} instance
+     *         with the same value; {@literal false} otherwise.
+     */
     @Override
     public boolean equals(Object obj) {
-        if (obj instanceof Identifier) {
-            return this.toString().equals(obj.toString());
+        if (obj == this) {
+            return true;
+        } else if (obj instanceof Identifier) {
+            return toString().equals(obj.toString());
         } else if (obj instanceof String) {
-            return this.toString().equals(obj);
+            return toString().equals(obj);
         }
         return super.equals(obj);
     }
 
     @Override
     public int hashCode(){
-        return this.toString().hashCode();
+        return toString().hashCode();
     }
 
     /**
-     * Identifiers have no character or length restrictions, but most
-     * filesystems do. This method returns a filename-safe, length-conscious
-     * string guaranteed to uniquely represent the instance.
-     *
-     * @return Filename-safe representation of the instance.
-     */
-    public String toFilename() {
-        try {
-            final MessageDigest digest = MessageDigest.getInstance("MD5");
-            digest.update(toString().getBytes(Charset.forName("UTF8")));
-            return Hex.encodeHexString(digest.digest());
-        } catch (NoSuchAlgorithmException e) {
-            logger.error("filenameFor(): {}", e.getMessage(), e);
-        }
-        return toString(); // This should never hit.
-    }
-
-    /**
-     * @return The value of the instance.
+     * @return Value of the instance.
      */
     @Override
     public String toString() {
-        return this.value;
+        return value;
     }
 
 }

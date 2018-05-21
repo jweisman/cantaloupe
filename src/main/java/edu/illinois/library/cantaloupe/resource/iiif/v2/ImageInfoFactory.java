@@ -3,94 +3,80 @@ package edu.illinois.library.cantaloupe.resource.iiif.v2;
 import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Format;
-import edu.illinois.library.cantaloupe.image.Identifier;
 import edu.illinois.library.cantaloupe.image.Info;
 import edu.illinois.library.cantaloupe.processor.Processor;
-import edu.illinois.library.cantaloupe.processor.ProcessorException;
 import edu.illinois.library.cantaloupe.resource.iiif.Feature;
 import edu.illinois.library.cantaloupe.resource.iiif.ImageInfoUtil;
-import edu.illinois.library.cantaloupe.script.DelegateScriptDisabledException;
-import edu.illinois.library.cantaloupe.script.ScriptEngineFactory;
+import edu.illinois.library.cantaloupe.script.DelegateProxy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.script.ScriptException;
 import java.awt.Dimension;
-import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-abstract class ImageInfoFactory {
+final class ImageInfoFactory {
 
-    private static Logger logger = LoggerFactory.
-            getLogger(ImageInfoFactory.class);
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(ImageInfoFactory.class);
 
-    /** Minimum size that will be used in info.json "sizes" keys. */
-    private static final int MIN_SIZE = 64;
-
-    /** Delegate script method that returns a JSON object (Ruby hash)
-     * containing additional keys to add to the information response. */
-    private static final String SERVICE_DELEGATE_METHOD =
-            "extra_iiif2_information_response_keys";
-
-    /** Will be populated in the static initializer. */
     private static final Set<ServiceFeature> SUPPORTED_SERVICE_FEATURES =
-            new HashSet<>();
+            Collections.unmodifiableSet(
+                    EnumSet.of(ServiceFeature.SIZE_BY_CONFINED_WIDTH_HEIGHT,
+                            ServiceFeature.SIZE_BY_WHITELISTED,
+                            ServiceFeature.BASE_URI_REDIRECT,
+                            ServiceFeature.CANONICAL_LINK_HEADER,
+                            ServiceFeature.CORS,
+                            ServiceFeature.JSON_LD_MEDIA_TYPE,
+                            ServiceFeature.PROFILE_LINK_HEADER));
 
-    static {
-        SUPPORTED_SERVICE_FEATURES.addAll(Arrays.asList(
-                ServiceFeature.SIZE_BY_CONFINED_WIDTH_HEIGHT,
-                ServiceFeature.SIZE_BY_WHITELISTED,
-                ServiceFeature.BASE_URI_REDIRECT,
-                ServiceFeature.CANONICAL_LINK_HEADER,
-                ServiceFeature.CORS,
-                ServiceFeature.JSON_LD_MEDIA_TYPE,
-                ServiceFeature.PROFILE_LINK_HEADER));
-    }
-
-    @SuppressWarnings("unchecked")
-    static ImageInfo<String,Object> newImageInfo(
-            final Identifier identifier,
-            final String imageUri,
-            final Processor processor,
-            final Info cacheInfo)
-            throws ProcessorException {
+    /**
+     * @param imageURI       May be {@literal null}.
+     * @param processor
+     * @param info
+     * @param infoImageIndex Index of the image in the {@link Info} argument's
+     *                       {@link Info#getImages()} list.
+     * @param proxy          May be {@literal null}.
+     */
+    ImageInfo<String,Object> newImageInfo(final String imageURI,
+                                          final Processor processor,
+                                          final Info info,
+                                          final int infoImageIndex,
+                                          final DelegateProxy proxy) {
         final Configuration config = Configuration.getInstance();
 
         // We want to use the orientation-aware full size, which takes the
         // embedded orientation into account.
-        final Dimension virtualSize = cacheInfo.getOrientationSize();
+        final Dimension virtualSize = info.getOrientationSize(infoImageIndex);
 
         // Create a Map instance, which will eventually be serialized to JSON
         // and returned in the response body.
-        final ImageInfo<String,Object> imageInfo = new ImageInfo<>();
-        imageInfo.put("@context", "http://iiif.io/api/image/2/context.json");
-        imageInfo.put("@id", imageUri);
-        imageInfo.put("protocol", "http://iiif.io/api/image");
-        imageInfo.put("width", virtualSize.width);
-        imageInfo.put("height", virtualSize.height);
+        final ImageInfo<String,Object> responseInfo = new ImageInfo<>();
+        responseInfo.put("@context", "http://iiif.io/api/image/2/context.json");
+        responseInfo.put("@id", imageURI);
+        responseInfo.put("protocol", "http://iiif.io/api/image");
+        responseInfo.put("width", virtualSize.width);
+        responseInfo.put("height", virtualSize.height);
 
         // sizes -- this will be a 2^n series that will work for both multi-
         // and monoresolution images.
-        final List<ImageInfo.Size> sizes = new ArrayList<>();
-        imageInfo.put("sizes", sizes);
+        final List<ImageInfo.Size> sizes = getSizes(info.getOrientationSize());
+        responseInfo.put("sizes", sizes);
 
+        final int minSize = getMinSize();
+        final int maxPixels = getMaxPixels();
+
+        // The max reduction factor is the maximum number of times the full
+        // image size can be halved until it's smaller than minSize.
         final int maxReductionFactor =
-                ImageInfoUtil.maxReductionFactor(virtualSize, MIN_SIZE);
-        for (double i = 2; i <= Math.pow(2, maxReductionFactor); i *= 2) {
-            final int width = (int) Math.round(virtualSize.width / i);
-            final int height = (int) Math.round(virtualSize.height / i);
-            if (width < MIN_SIZE || height < MIN_SIZE) {
-                break;
-            }
-            ImageInfo.Size size = new ImageInfo.Size(width, height);
-            sizes.add(0, size);
-        }
+                ImageInfoUtil.maxReductionFactor(virtualSize, minSize);
 
         // tiles -- this is not a canonical listing of tiles that are
         // actually encoded in the image, but rather a hint to the client as
@@ -104,20 +90,19 @@ abstract class ImageInfoFactory {
         // Otherwise, use the smallest multiple of the tile size above that
         // of image resolution 0.
         final List<ImageInfo.Tile> tiles = new ArrayList<>();
-        imageInfo.put("tiles", tiles);
+        responseInfo.put("tiles", tiles);
 
-        final Info.Image firstImage =
-                cacheInfo.getImages().get(0);
+        final Info.Image firstImage = info.getImages().get(0);
 
         // Find the virtual tile size based on the virtual full image size.
         final Dimension virtualTileSize = firstImage.getOrientationTileSize();
 
-        if (cacheInfo.getImages().size() == 1 &&
+        if (info.getNumResolutions() == 1 &&
                 virtualTileSize.equals(virtualSize)) {
             uniqueTileSizes.add(
                     ImageInfoUtil.smallestTileSize(virtualSize, minTileSize));
         } else {
-            for (Info.Image image : cacheInfo.getImages()) {
+            for (Info.Image image : info.getImages()) {
                 uniqueTileSizes.add(
                         ImageInfoUtil.smallestTileSize(virtualSize,
                                 image.getOrientationTileSize(), minTileSize));
@@ -135,12 +120,12 @@ abstract class ImageInfoFactory {
         }
 
         final List<Object> profile = new ArrayList<>();
-        imageInfo.put("profile", profile);
+        responseInfo.put("profile", profile);
 
         final String complianceUri = ComplianceLevel.getLevel(
                 SUPPORTED_SERVICE_FEATURES,
                 processor.getSupportedFeatures(),
-                processor.getSupportedIiif2_0Qualities(),
+                processor.getSupportedIIIF2Qualities(),
                 processor.getAvailableOutputFormats()).getUri();
         profile.add(complianceUri);
 
@@ -154,14 +139,13 @@ abstract class ImageInfoFactory {
         profile.add(profileMap);
 
         // maxArea (maxWidth and maxHeight are currently not supported)
-        final int maxPixels = config.getInt(Key.MAX_PIXELS, 0);
         if (maxPixels > 0) {
             profileMap.put("maxArea", maxPixels);
         }
 
         // qualities
         Set<String> qualityStrings = new HashSet<>();
-        for (Quality quality : processor.getSupportedIiif2_0Qualities()) {
+        for (Quality quality : processor.getSupportedIIIF2Qualities()) {
             qualityStrings.add(quality.toString().toLowerCase());
         }
         profileMap.put("qualities", qualityStrings);
@@ -177,18 +161,63 @@ abstract class ImageInfoFactory {
         profileMap.put("supports", featureStrings);
 
         // additional keys
-        try {
-            final Map keyMap = (Map) ScriptEngineFactory.getScriptEngine().
-                    invoke(SERVICE_DELEGATE_METHOD, identifier.toString());
-            imageInfo.putAll(keyMap);
-        } catch (DelegateScriptDisabledException e) {
-            logger.info("Delegate script disabled; skipping service " +
-                    "information.");
-        } catch (ScriptException | IOException e) {
-            logger.error(e.getMessage());
+        if (proxy != null) {
+            try {
+                final Map<String, Object> keyMap =
+                        proxy.getExtraIIIFInformationResponseKeys();
+                responseInfo.putAll(keyMap);
+            } catch (ScriptException e) {
+                LOGGER.error(e.getMessage());
+            }
         }
 
-        return imageInfo;
+        return responseInfo;
+    }
+
+    /**
+     * @param virtualSize Orientation-aware full size, which takes an embedded
+     *                    orientation flag into account.
+     */
+    List<ImageInfo.Size> getSizes(Dimension virtualSize) {
+        // This will be a 2^n series that will work for both multi- and
+        // monoresolution images.
+        final List<ImageInfo.Size> sizes = new ArrayList<>();
+
+        final int minSize = getMinSize();
+        final int maxPixels = getMaxPixels();
+
+        // The min reduction factor is the smallest number of reductions that
+        // are required in order to fit within max pixels.
+        final int minReductionFactor = (maxPixels > 0) ?
+                ImageInfoUtil.minReductionFactor(virtualSize, maxPixels) : 0;
+        // The max reduction factor is the maximum number of times the full
+        // image size can be halved until it's smaller than minSize.
+        final int maxReductionFactor =
+                ImageInfoUtil.maxReductionFactor(virtualSize, minSize);
+
+        for (double i = Math.pow(2, minReductionFactor);
+             i <= Math.pow(2, maxReductionFactor);
+             i *= 2) {
+            final int width = (int) Math.round(virtualSize.width / i);
+            final int height = (int) Math.round(virtualSize.height / i);
+            sizes.add(0, new ImageInfo.Size(width, height));
+        }
+        return sizes;
+    }
+
+    /**
+     * @return Maximum number of pixels that will be used in {@literal sizes}
+     *         keys.
+     */
+    private int getMaxPixels() {
+        return Configuration.getInstance().getInt(Key.MAX_PIXELS, 0);
+    }
+
+    /**
+     * @return Minimum size that will be used in {@literal sizes} keys.
+     */
+    private int getMinSize() {
+        return Configuration.getInstance().getInt(Key.IIIF_MIN_SIZE, 64);
     }
 
 }

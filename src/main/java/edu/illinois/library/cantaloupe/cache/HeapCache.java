@@ -1,7 +1,7 @@
 package edu.illinois.library.cantaloupe.cache;
 
 import com.google.protobuf.ByteString;
-import edu.illinois.library.cantaloupe.ThreadPool;
+import edu.illinois.library.cantaloupe.async.ThreadPool;
 import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.ConfigurationException;
 import edu.illinois.library.cantaloupe.image.Identifier;
@@ -13,13 +13,11 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -46,7 +44,7 @@ import static edu.illinois.library.cantaloupe.config.Key.*;
  * size may be safely changed while the application is running.)</p>
  *
  * <p>Because this cache is not time-limited,
- * {@link edu.illinois.library.cantaloupe.config.Key#CACHE_SERVER_TTL} does not
+ * {@link edu.illinois.library.cantaloupe.config.Key#DERIVATIVE_CACHE_TTL} does not
  * apply.</p>
  *
  * <p>The cache supports startup/shutdown persistence, using
@@ -123,7 +121,9 @@ class HeapCache implements DerivativeCache {
 
         @Override
         public boolean equals(Object obj) {
-            if (obj instanceof Key) {
+            if (obj == this) {
+                return true;
+            } else if (obj instanceof Key) {
                 final Key other = (Key) obj;
                 return toString().equals(other.toString());
             }
@@ -154,7 +154,7 @@ class HeapCache implements DerivativeCache {
         @Override
         public String toString() {
             return (getOperationList() != null) ?
-                    getOperationList() : getIdentifier();
+                    "op:" + getOperationList() : "id:" + getIdentifier();
         }
 
         /**
@@ -181,7 +181,7 @@ class HeapCache implements DerivativeCache {
 
         @Override
         public void close() throws IOException {
-            logger.debug("Closing stream for {}", opList);
+            LOGGER.debug("Closing stream for {}", opList);
             Key key = itemKey(opList);
             Item item = new Item(wrappedStream.toByteArray());
             cache.put(key, item);
@@ -190,6 +190,11 @@ class HeapCache implements DerivativeCache {
             } finally {
                 wrappedStream.close();
             }
+        }
+
+        @Override
+        public void flush() throws IOException {
+            wrappedStream.flush();
         }
 
         @Override
@@ -216,7 +221,7 @@ class HeapCache implements DerivativeCache {
 
         private final Logger logger = LoggerFactory.getLogger(Worker.class);
 
-        private static final int INTERVAL_SECONDS = 5;
+        private static final int INTERVAL_SECONDS = 10;
 
         @Override
         public void run() {
@@ -241,76 +246,80 @@ class HeapCache implements DerivativeCache {
 
     }
 
-    private static final Logger logger = LoggerFactory.
-            getLogger(HeapCache.class);
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(HeapCache.class);
 
     private final ConcurrentMap<Key, Item> cache = new ConcurrentHashMap<>();
-    private final AtomicBoolean isDirty = new AtomicBoolean(false);
+    private final AtomicBoolean isDirty          = new AtomicBoolean(false);
     private final AtomicBoolean workerShouldWork = new AtomicBoolean(true);
+
+    private final Object persistenceLock = new Object();
 
     /**
      * <p>Dumps the cache contents to the file specified by
      * {@link edu.illinois.library.cantaloupe.config.Key#HEAPCACHE_PATHNAME},
      * first deleting the file that already exists at that path, if any.</p>
      *
-     * <p>{@link edu.illinois.library.cantaloupe.config.Key#HEAPCACHE_PERSIST}
-     * is <strong>not</strong> respected.</p>
+     * <p>Concurrent calls will block.</p>
+     *
+     * <p>N.B.:
+     * {@link edu.illinois.library.cantaloupe.config.Key#HEAPCACHE_PERSIST} is
+     * <strong>not</strong> respected.</p>
      */
-    synchronized void dumpToPersistentStore() throws IOException {
-        final Configuration config = Configuration.getInstance();
-        final String pathname = config.getString(HEAPCACHE_PATHNAME);
-        if (pathname != null && pathname.length() > 0) {
-            final Path path = Paths.get(pathname);
-            // Delete any existing file that is in the way.
-            Files.deleteIfExists(path);
-            // Create any necessary directories up to the parent.
-            Files.createDirectories(path.getParent());
-            // Write out the contents.
-            logger.info("dumpToPersistentStore(): dumping to {}...", path);
+    void dumpToPersistentStore() throws IOException {
+        synchronized (persistenceLock) {
+            final Path path = getPath();
+            if (path != null) {
+                // Delete any existing file that is in the way.
+                Files.deleteIfExists(path);
+                // Create any necessary directories up to the parent.
+                Files.createDirectories(path.getParent());
+                // Write out the contents.
+                LOGGER.info("Dumping to {}...", path);
 
-            final long size = size();
-            final long byteSize = getByteSize();
+                final long size = size();
+                final long byteSize = getByteSize();
 
-            final HeapCacheProtos.Cache.Builder cacheBuilder =
-                    HeapCacheProtos.Cache.newBuilder();
+                final HeapCacheProtos.Cache.Builder cacheBuilder =
+                        HeapCacheProtos.Cache.newBuilder();
 
-            // Iterate over the cache keys and add cache values one-by-one to
-            // the protobuf cache, removing them from the cache along the way
-            // to save memory.
-            final Iterator<Key> it = cache.keySet().iterator();
-            while (it.hasNext()) {
-                final Key key = it.next();
-                final Item item = cache.get(key);
-                if (key.getOperationList() != null) { // it's an image
-                    final HeapCacheProtos.Image image =
-                            HeapCacheProtos.Image.newBuilder().
-                                    setLastAccessed(key.getLastAccessedTime()).
-                                    setIdentifier(key.getIdentifier()).
-                                    setOperationList(key.getOperationList()).
-                                    setData(ByteString.copyFrom(item.getData())).
-                                    build();
-                    cacheBuilder.addImage(image);
-                } else { // it's an info
-                    final HeapCacheProtos.Info info =
-                            HeapCacheProtos.Info.newBuilder().
-                                    setLastAccessed(key.getLastAccessedTime()).
-                                    setIdentifier(key.getIdentifier()).
-                                    setJson(new String(item.getData())).
-                                    build();
-                    cacheBuilder.addInfo(info);
+                // Iterate over the cache keys and add cache values one-by-one to
+                // the protobuf cache, removing them from the cache along the way
+                // to save memory.
+                final Iterator<Key> it = cache.keySet().iterator();
+                while (it.hasNext()) {
+                    final Key key = it.next();
+                    final Item item = cache.get(key);
+                    if (key.getOperationList() != null) { // it's an image
+                        final HeapCacheProtos.Image image =
+                                HeapCacheProtos.Image.newBuilder()
+                                        .setLastAccessed(key.getLastAccessedTime())
+                                        .setIdentifier(key.getIdentifier())
+                                        .setOperationList(key.getOperationList())
+                                        .setData(ByteString.copyFrom(item.getData()))
+                                        .build();
+                        cacheBuilder.addImage(image);
+                    } else { // it's an info
+                        final HeapCacheProtos.Info info =
+                                HeapCacheProtos.Info.newBuilder()
+                                        .setLastAccessed(key.getLastAccessedTime())
+                                        .setIdentifier(key.getIdentifier())
+                                        .setJson(new String(item.getData(), "UTF-8"))
+                                        .build();
+                        cacheBuilder.addInfo(info);
+                    }
+                    it.remove();
                 }
-                it.remove();
-            }
 
-            try (FileOutputStream fos = new FileOutputStream(path.toFile())) {
-                cacheBuilder.build().writeTo(fos);
-            }
+                try (OutputStream fos = Files.newOutputStream(path)) {
+                    cacheBuilder.build().writeTo(fos);
+                }
 
-            logger.info("dumpToPersistentStore(): dumped {} items ({} bytes)",
-                    size, byteSize);
-        } else {
-            throw new IOException("dumpToPersistentStore(): " +
-                    HEAPCACHE_PATHNAME + " is not set");
+                LOGGER.info("Dumped {} items ({} bytes)", size, byteSize);
+            } else {
+                throw new IOException("dumpToPersistentStore(): " +
+                        HEAPCACHE_PATHNAME + " is not set");
+            }
         }
     }
 
@@ -335,20 +344,18 @@ class HeapCache implements DerivativeCache {
      * @return Current size of the contents in bytes.
      */
     long getByteSize() {
-        return cache.values().stream().mapToLong(t -> t.getData().length).sum();
+        return cache.values().parallelStream()
+                .mapToLong(t -> t.getData().length).sum();
     }
 
     @Override
-    public Info getImageInfo(Identifier identifier) throws CacheException {
+    public Info getImageInfo(Identifier identifier) throws IOException {
         Info info = null;
         Item item = get(itemKey(identifier));
         if (item != null) {
-            logger.info("getImageInfo(): hit for {}", identifier);
-            try {
-                info = Info.fromJson(new String(item.getData(), "UTF-8"));
-            } catch (IOException e) {
-                throw new CacheException(e.getMessage(), e);
-            }
+            LOGGER.info("getImageInfo(): hit for {}", identifier);
+
+            info = Info.fromJSON(new String(item.getData(), "UTF-8"));
         }
         return info;
     }
@@ -363,6 +370,20 @@ class HeapCache implements DerivativeCache {
                     -1 : 1;
         });
         return sortedKeys;
+    }
+
+    /**
+     * @return Path representing the value of
+     *         {@link edu.illinois.library.cantaloupe.config.Key#HEAPCACHE_PATHNAME},
+     *         of {@literal null} if it is not set.
+     */
+    private Path getPath() {
+        final Configuration config = Configuration.getInstance();
+        String pathname = config.getString(HEAPCACHE_PATHNAME);
+        if (pathname != null) {
+            return Paths.get(pathname);
+        }
+        return null;
     }
 
     /**
@@ -402,21 +423,32 @@ class HeapCache implements DerivativeCache {
 
     @Override
     public void initialize() {
-        final Configuration config = Configuration.getInstance();
-        if (config.getBoolean(HEAPCACHE_PERSIST, false)) {
+        if (isPersistenceEnabled()) {
             loadFromPersistentStore();
         }
 
         // Start a worker thread to manage the size.
         try {
-            ThreadPool.getInstance().submit(new Worker());
+            ThreadPool.getInstance().submit(new Worker(),
+                    ThreadPool.Priority.LOW);
         } catch (RejectedExecutionException e) {
-            logger.error("initialize(): {}", e.getMessage());
+            LOGGER.error("initialize(): {}", e.getMessage());
         }
     }
 
     boolean isDirty() {
         return isDirty.get();
+    }
+
+    /**
+     * @return Value of
+     *         {@link edu.illinois.library.cantaloupe.config.Key#HEAPCACHE_PERSIST}
+     *         in the application configuration, or {@literal false} if it is
+     *         not set.
+     */
+    boolean isPersistenceEnabled() {
+        final Configuration config = Configuration.getInstance();
+        return config.getBoolean(HEAPCACHE_PERSIST, false);
     }
 
     /**
@@ -437,46 +469,46 @@ class HeapCache implements DerivativeCache {
         return new Key(opList.getIdentifier().toString(), opList.toString());
     }
 
-    @SuppressWarnings("unchecked")
-    synchronized void loadFromPersistentStore() {
-        final Configuration config = Configuration.getInstance();
-        final String pathname = config.getString(HEAPCACHE_PATHNAME);
-        final Path path = Paths.get(pathname);
+    void loadFromPersistentStore() {
+        synchronized (persistenceLock) {
+            final Path path = getPath();
 
-        if (Files.exists(path)) {
-            logger.info("loadFromPersistentStore(): reading {}...", path);
+            if (path != null && Files.exists(path)) {
+                LOGGER.info("loadFromPersistentStore(): reading {}...", path);
 
-            try (FileInputStream fis = new FileInputStream(path.toFile())) {
-                final HeapCacheProtos.Cache protoCache =
-                        HeapCacheProtos.Cache.parseFrom(fis);
+                try (InputStream is = Files.newInputStream(path)) {
+                    final HeapCacheProtos.Cache protoCache =
+                            HeapCacheProtos.Cache.parseFrom(is);
 
-                // Read in the images.
-                for (HeapCacheProtos.Image image : protoCache.getImageList()) {
-                    final Key key = new Key(image.getIdentifier(),
-                            image.getOperationList());
-                    key.setLastAccessedTime(image.getLastAccessed());
-                    final Item item = new Item(image.getData().toByteArray());
-                    cache.put(key, item);
+                    // Read in the images.
+                    for (HeapCacheProtos.Image image : protoCache.getImageList()) {
+                        final Key key = new Key(image.getIdentifier(),
+                                image.getOperationList());
+                        key.setLastAccessedTime(image.getLastAccessed());
+                        final Item item = new Item(image.getData().toByteArray());
+                        cache.put(key, item);
+                    }
+
+                    // Read in the infos.
+                    for (HeapCacheProtos.Info info : protoCache.getInfoList()) {
+                        final Key key = new Key(info.getIdentifier());
+                        key.setLastAccessedTime(info.getLastAccessed());
+                        final Item item = new Item(info.getJsonBytes().toByteArray());
+                        cache.put(key, item);
+                    }
+
+                    LOGGER.info("Loaded {} items ({} bytes)",
+                            size(), getByteSize());
+                } catch (NoSuchFileException e) {
+                    LOGGER.error("loadFromPersistentStore(): file not found: {}",
+                            e.getMessage());
+                } catch (IOException e) {
+                    LOGGER.error("loadFromPersistentStore(): {}",
+                            e.getMessage());
                 }
-
-                // Read in the infos.
-                for (HeapCacheProtos.Info info : protoCache.getInfoList()) {
-                    final Key key = new Key(info.getIdentifier());
-                    key.setLastAccessedTime(info.getLastAccessed());
-                    final Item item = new Item(info.getJsonBytes().toByteArray());
-                    cache.put(key, item);
-                }
-
-                logger.info("loadFromPersistentStore(): loaded {} items ({} bytes)",
-                        size(), getByteSize());
-            } catch (FileNotFoundException e) {
-                logger.error("loadFromPersistentStore(): file not found: {}",
-                        e.getMessage());
-            } catch (IOException e) {
-                logger.error("loadFromPersistentStore(): {}", e.getMessage());
+            } else {
+                LOGGER.info("loadFromPersistentStore(): does not exist: {}", path);
             }
-        } else {
-            logger.info("loadFromPersistentStore(): does not exist: {}", path);
         }
     }
 
@@ -490,16 +522,15 @@ class HeapCache implements DerivativeCache {
     }
 
     @Override
-    public OutputStream newDerivativeImageOutputStream(OperationList opList)
-            throws CacheException {
+    public OutputStream newDerivativeImageOutputStream(OperationList opList) {
         final Key key = itemKey(opList);
         final Item item = cache.get(key);
         if (item != null) {
-            logger.info("newDerivativeImageOutputStream(): hit for {}", opList);
+            LOGGER.info("newDerivativeImageOutputStream(): hit for {}", opList);
             touch(item);
             return new NullOutputStream();
         } else {
-            logger.info("newDerivativeImageOutputStream(): miss; caching {}",
+            LOGGER.info("newDerivativeImageOutputStream(): miss; caching {}",
                     opList);
             isDirty.lazySet(true);
             return new HeapCacheOutputStream(opList);
@@ -507,21 +538,21 @@ class HeapCache implements DerivativeCache {
     }
 
     @Override
-    public void purge() throws CacheException {
-        logger.info("purge(): purging {} items", cache.size());
+    public void purge() {
+        LOGGER.info("purge(): purging {} items", cache.size());
         cache.clear();
     }
 
     @Override
     public void purge(Identifier identifier) {
-        logger.info("purge(Identifier): purging {}...", identifier);
+        LOGGER.info("purge(Identifier): purging {}...", identifier);
         final String imageId = itemKey(identifier).getIdentifier();
         cache.keySet().removeIf(k -> k.getIdentifier().equals(imageId));
     }
 
     @Override
     public void purge(OperationList opList) {
-        logger.info("purge(OperationList): purging {}...", opList.toString());
+        LOGGER.info("purge(OperationList): purging {}...", opList.toString());
         cache.remove(itemKey(opList));
     }
 
@@ -535,7 +566,7 @@ class HeapCache implements DerivativeCache {
             final long targetSize = getTargetByteSize();
             long excess = size - targetSize;
             excess = (excess < 0) ? 0 : excess;
-            logger.debug("purgeExcess(): cache size: {}; target: {}; excess: {}",
+            LOGGER.debug("purgeExcess(): cache size: {}; target: {}; excess: {}",
                     size, targetSize, excess);
             if (excess > 0) {
                 long purgedItems = 0;
@@ -552,7 +583,7 @@ class HeapCache implements DerivativeCache {
                     }
                 }
                 isDirty.lazySet(true);
-                logger.info("purgeExcess(): purged {} items ({} bytes)",
+                LOGGER.info("purgeExcess(): purged {} items ({} bytes)",
                         purgedItems, purgedSize);
             }
         }
@@ -562,24 +593,20 @@ class HeapCache implements DerivativeCache {
      * Does nothing, as items in this cache never expire.
      */
     @Override
-    public void purgeExpired() {
-        logger.info("purgeExpired() is not supported by this cache; aborting");
+    public void purgeInvalid() {
+        LOGGER.info("purgeInvalid() is not supported by this cache; aborting");
     }
 
     @Override
-    public void put(Identifier identifier, Info imageInfo)
-            throws CacheException {
-        logger.info("put(): caching info for {}", identifier);
+    public void put(Identifier identifier, Info imageInfo) throws IOException {
+        LOGGER.info("put(): caching info for {}", identifier);
         isDirty.lazySet(true);
         Key key = itemKey(identifier);
-        try {
-            // Rather than storing the info instance itself, we store its JSON
-            // serialization, mainly in order to be able to easily get its size.
-            Item item = new Item(imageInfo.toJson().getBytes("UTF-8"));
-            cache.putIfAbsent(key, item);
-        } catch (IOException e) {
-            throw new CacheException(e.getMessage(), e);
-        }
+
+        // Rather than storing the info instance itself, we store its JSON
+        // serialization, mainly in order to be able to easily get its size.
+        Item item = new Item(imageInfo.toJSON().getBytes("UTF-8"));
+        cache.putIfAbsent(key, item);
     }
 
     /**
@@ -595,12 +622,11 @@ class HeapCache implements DerivativeCache {
 
         // Dump the cache contents to disk, if the cache is dirty, and if
         // PERSIST_CONFIG_KEY is set to true.
-        final Configuration config = Configuration.getInstance();
-        if (isDirty() && config.getBoolean(HEAPCACHE_PERSIST, false)) {
+        if (isDirty() && isPersistenceEnabled()) {
             try {
                 dumpToPersistentStore();
             } catch (IOException e) {
-                logger.error(e.getMessage());
+                LOGGER.error(e.getMessage());
             }
         }
     }
@@ -612,10 +638,10 @@ class HeapCache implements DerivativeCache {
      * @param item Item whose key should be touched.
      */
     private void touch(Item item) {
-        cache.entrySet().stream().
-                filter(entry -> Objects.equals(entry.getValue(), item)).
-                map(Map.Entry::getKey).
-                collect(Collectors.toSet()).forEach(Key::touch);
+        cache.entrySet().parallelStream()
+                .filter(entry -> Objects.equals(entry.getValue(), item))
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toSet()).forEach(Key::touch);
     }
 
 }

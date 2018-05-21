@@ -1,6 +1,6 @@
 package edu.illinois.library.cantaloupe.config;
 
-import edu.illinois.library.cantaloupe.ThreadPool;
+import edu.illinois.library.cantaloupe.async.ThreadPool;
 
 import java.io.File;
 import java.io.IOException;
@@ -25,7 +25,7 @@ abstract class FileConfiguration extends AbstractConfiguration {
                 // on a working configuration. (Also, we don't want to
                 // introduce a dependency on the logger, because of the way
                 // the application is packaged.)
-                System.out.println(e.getMessage());
+                System.err.println(e.getMessage());
             }
         }
         return null;
@@ -36,7 +36,8 @@ abstract class FileConfiguration extends AbstractConfiguration {
      */
     public synchronized void startWatching() {
         watcher = new FileConfigurationWatcher(getFile());
-        watcherFuture = ThreadPool.getInstance().submit(watcher);
+        watcherFuture = ThreadPool.getInstance().submit(watcher,
+                ThreadPool.Priority.LOW);
     }
 
     /**

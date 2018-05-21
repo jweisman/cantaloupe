@@ -1,10 +1,10 @@
 package edu.illinois.library.cantaloupe.processor;
 
-import edu.illinois.library.cantaloupe.resolver.StreamSource;
+import edu.illinois.library.cantaloupe.source.StreamFactory;
 import edu.illinois.library.cantaloupe.resource.iiif.ProcessorFeature;
 
-import java.util.Arrays;
-import java.util.HashSet;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.Set;
 
 /**
@@ -14,75 +14,75 @@ import java.util.Set;
 abstract class AbstractMagickProcessor extends AbstractProcessor {
 
     private static final Set<ProcessorFeature> SUPPORTED_FEATURES =
-            new HashSet<>();
+            Collections.unmodifiableSet(EnumSet.of(
+                    ProcessorFeature.MIRRORING,
+                    ProcessorFeature.REGION_BY_PERCENT,
+                    ProcessorFeature.REGION_BY_PIXELS,
+                    ProcessorFeature.REGION_SQUARE,
+                    ProcessorFeature.ROTATION_ARBITRARY,
+                    ProcessorFeature.ROTATION_BY_90S,
+                    ProcessorFeature.SIZE_ABOVE_FULL,
+                    ProcessorFeature.SIZE_BY_DISTORTED_WIDTH_HEIGHT,
+                    ProcessorFeature.SIZE_BY_FORCED_WIDTH_HEIGHT,
+                    ProcessorFeature.SIZE_BY_HEIGHT,
+                    ProcessorFeature.SIZE_BY_PERCENT,
+                    ProcessorFeature.SIZE_BY_WIDTH,
+                    ProcessorFeature.SIZE_BY_WIDTH_HEIGHT));
     private static final Set<edu.illinois.library.cantaloupe.resource.iiif.v1.Quality>
-            SUPPORTED_IIIF_1_1_QUALITIES = new HashSet<>();
+            SUPPORTED_IIIF_1_1_QUALITIES = Collections.unmodifiableSet(EnumSet.of(
+                    edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.BITONAL,
+                    edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.COLOR,
+                    edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.GRAY,
+                    edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.NATIVE));
     private static final Set<edu.illinois.library.cantaloupe.resource.iiif.v2.Quality>
-            SUPPORTED_IIIF_2_0_QUALITIES = new HashSet<>();
+            SUPPORTED_IIIF_2_0_QUALITIES = Collections.unmodifiableSet(EnumSet.of(
+                    edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.BITONAL,
+                    edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.COLOR,
+                    edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.DEFAULT,
+                    edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.GRAY));
 
-    protected StreamSource streamSource;
+    protected StreamFactory streamFactory;
 
-    static {
-        SUPPORTED_IIIF_1_1_QUALITIES.addAll(Arrays.asList(
-                edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.BITONAL,
-                edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.COLOR,
-                edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.GRAY,
-                edu.illinois.library.cantaloupe.resource.iiif.v1.Quality.NATIVE));
-        SUPPORTED_IIIF_2_0_QUALITIES.addAll(Arrays.asList(
-                edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.BITONAL,
-                edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.COLOR,
-                edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.DEFAULT,
-                edu.illinois.library.cantaloupe.resource.iiif.v2.Quality.GRAY));
-        SUPPORTED_FEATURES.addAll(Arrays.asList(
-                ProcessorFeature.MIRRORING,
-                ProcessorFeature.REGION_BY_PERCENT,
-                ProcessorFeature.REGION_BY_PIXELS,
-                ProcessorFeature.REGION_SQUARE,
-                ProcessorFeature.ROTATION_ARBITRARY,
-                ProcessorFeature.ROTATION_BY_90S,
-                ProcessorFeature.SIZE_ABOVE_FULL,
-                ProcessorFeature.SIZE_BY_DISTORTED_WIDTH_HEIGHT,
-                ProcessorFeature.SIZE_BY_FORCED_WIDTH_HEIGHT,
-                ProcessorFeature.SIZE_BY_HEIGHT,
-                ProcessorFeature.SIZE_BY_PERCENT,
-                ProcessorFeature.SIZE_BY_WIDTH,
-                ProcessorFeature.SIZE_BY_WIDTH_HEIGHT));
-    }
-
-    public StreamSource getStreamSource() {
-        return this.streamSource;
+    public StreamFactory getStreamFactory() {
+        return streamFactory;
     }
 
     public Set<ProcessorFeature> getSupportedFeatures() {
-        Set<ProcessorFeature> features = new HashSet<>();
-        if (getAvailableOutputFormats().size() > 0) {
-            features.addAll(SUPPORTED_FEATURES);
+        Set<ProcessorFeature> features;
+        if (!getAvailableOutputFormats().isEmpty()) {
+            features = SUPPORTED_FEATURES;
+        } else {
+            features = Collections.unmodifiableSet(Collections.emptySet());
         }
         return features;
     }
 
     public Set<edu.illinois.library.cantaloupe.resource.iiif.v1.Quality>
-    getSupportedIiif1_1Qualities() {
+    getSupportedIIIF1Qualities() {
         Set<edu.illinois.library.cantaloupe.resource.iiif.v1.Quality>
-                qualities = new HashSet<>();
-        if (getAvailableOutputFormats().size() > 0) {
-            qualities.addAll(SUPPORTED_IIIF_1_1_QUALITIES);
+                qualities;
+        if (!getAvailableOutputFormats().isEmpty()) {
+            qualities = SUPPORTED_IIIF_1_1_QUALITIES;
+        } else {
+            qualities = Collections.unmodifiableSet(Collections.emptySet());
         }
         return qualities;
     }
 
     public Set<edu.illinois.library.cantaloupe.resource.iiif.v2.Quality>
-    getSupportedIiif2_0Qualities() {
+    getSupportedIIIF2Qualities() {
         Set<edu.illinois.library.cantaloupe.resource.iiif.v2.Quality>
-                qualities = new HashSet<>();
-        if (getAvailableOutputFormats().size() > 0) {
-            qualities.addAll(SUPPORTED_IIIF_2_0_QUALITIES);
+                qualities;
+        if (!getAvailableOutputFormats().isEmpty()) {
+            qualities = SUPPORTED_IIIF_2_0_QUALITIES;
+        } else {
+            qualities = Collections.unmodifiableSet(Collections.emptySet());
         }
         return qualities;
     }
 
-    public void setStreamSource(StreamSource streamSource) {
-        this.streamSource = streamSource;
+    public void setStreamFactory(StreamFactory streamFactory) {
+        this.streamFactory = streamFactory;
     }
 
 }

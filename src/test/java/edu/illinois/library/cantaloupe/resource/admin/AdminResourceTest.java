@@ -1,47 +1,34 @@
 package edu.illinois.library.cantaloupe.resource.admin;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import edu.illinois.library.cantaloupe.Application;
 import edu.illinois.library.cantaloupe.RestletApplication;
 import edu.illinois.library.cantaloupe.config.Configuration;
-import edu.illinois.library.cantaloupe.config.ConfigurationFactory;
 import edu.illinois.library.cantaloupe.config.Key;
-import edu.illinois.library.cantaloupe.resource.ResourceTest;
-import org.junit.Before;
+import edu.illinois.library.cantaloupe.http.Headers;
+import edu.illinois.library.cantaloupe.http.ResourceException;
+import edu.illinois.library.cantaloupe.http.Response;
+import org.apache.commons.lang3.StringUtils;
+import org.junit.Ignore;
 import org.junit.Test;
-import org.restlet.data.CacheDirective;
-import org.restlet.data.ChallengeResponse;
-import org.restlet.data.ChallengeScheme;
-import org.restlet.data.MediaType;
-import org.restlet.data.Status;
-import org.restlet.resource.ClientResource;
-import org.restlet.resource.ResourceException;
 
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.Assert.*;
 
 /**
  * Functional test of AdminResource.
  */
-public class AdminResourceTest extends ResourceTest {
+public class AdminResourceTest extends AbstractAdminResourceTest {
 
-    private static final String USERNAME = "admin";
-    private static final String SECRET = "secret";
-
-    @Before
     @Override
-    public void setUp() throws Exception {
-        super.setUp();
-
-        final Configuration config = ConfigurationFactory.getInstance();
-        config.setProperty(Key.ADMIN_SECRET, SECRET);
+    protected String getEndpointPath() {
+        return RestletApplication.ADMIN_PATH;
     }
 
     @Test
-    public void testCacheHeaders() {
-        Configuration config = ConfigurationFactory.getInstance();
+    public void testGETCacheHeaders() throws Exception {
+        Configuration config = Configuration.getInstance();
         config.setProperty(Key.CLIENT_CACHE_ENABLED, "true");
         config.setProperty(Key.CLIENT_CACHE_MAX_AGE, "1234");
         config.setProperty(Key.CLIENT_CACHE_SHARED_MAX_AGE, "4567");
@@ -52,104 +39,85 @@ public class AdminResourceTest extends ResourceTest {
         config.setProperty(Key.CLIENT_CACHE_MUST_REVALIDATE, "false");
         config.setProperty(Key.CLIENT_CACHE_PROXY_REVALIDATE, "false");
 
-        Map<String, String> expectedDirectives = new HashMap<>();
-        expectedDirectives.put("no-cache", null);
-
-        ClientResource client = getClientForUriPath(RestletApplication.ADMIN_PATH,
-                USERNAME, SECRET);
-        client.get();
-        List<CacheDirective> actualDirectives = client.getResponse().getCacheDirectives();
-        for (CacheDirective d : actualDirectives) {
-            if (d.getName() != null) {
-                assertTrue(expectedDirectives.keySet().contains(d.getName()));
-                if (d.getValue() != null) {
-                    assertTrue(expectedDirectives.get(d.getName()).equals(d.getValue()));
-                } else {
-                    assertNull(expectedDirectives.get(d.getName()));
-                }
-            }
-        }
+        Response response = client.send();
+        assertEquals("no-cache",
+                response.getHeaders().getFirstValue("Cache-Control"));
     }
 
     @Test
-    public void testDoGetAsHtml() throws Exception {
-        // no credentials
-        ClientResource client = getClientForUriPath(RestletApplication.ADMIN_PATH);
+    public void testGETWithNoCredentials() throws Exception {
         try {
-            client.get();
+            client.setUsername(null);
+            client.setSecret(null);
+            client.send();
             fail("Expected exception");
         } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_UNAUTHORIZED, client.getStatus());
+            assertEquals(401, e.getStatusCode());
         }
+    }
 
-        // invalid credentials
-        client.setChallengeResponse(
-                new ChallengeResponse(ChallengeScheme.HTTP_BASIC, "invalid", "invalid"));
+    @Test
+    public void testGETWithInvalidCredentials() throws Exception {
         try {
-            client.get();
+            client.setUsername("invalid");
+            client.setSecret("invalid");
+            client.send();
             fail("Expected exception");
         } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_UNAUTHORIZED, client.getStatus());
+            assertEquals(401, e.getStatusCode());
         }
-
-        // valid credentials
-        client.setChallengeResponse(
-                new ChallengeResponse(ChallengeScheme.HTTP_BASIC, USERNAME, SECRET));
-        client.get(MediaType.TEXT_HTML);
-        assertEquals(Status.SUCCESS_OK, client.getStatus());
-        assertTrue(client.getResponse().getEntityAsText().
-                contains("Cantaloupe Image Server"));
     }
 
     @Test
-    public void testDoGetAsJson() {
-        ConfigurationFactory.getInstance().setProperty("test", "cats");
-
-        ClientResource client = getClientForUriPath(RestletApplication.ADMIN_PATH,
-                USERNAME, SECRET);
-
-        client.get(MediaType.APPLICATION_JSON);
-        assertTrue(client.getResponse().getEntityAsText().
-                contains("\"test\":\"cats\""));
-    }
-
-    @Test
-    public void testDoPost() throws Exception {
-        Map<String,Object> entityMap = new HashMap<>();
-        entityMap.put("test", "cats");
-        String entity = new ObjectMapper().writer().writeValueAsString(entityMap);
-
-        ClientResource client = getClientForUriPath(RestletApplication.ADMIN_PATH,
-                USERNAME, SECRET);
-        client.post(entity, MediaType.APPLICATION_JSON);
-
-        assertEquals("cats", ConfigurationFactory.getInstance().getString("test"));
-    }
-
-    @Test
-    public void testDoPostSavesFile() {
-        // TODO: write this
-    }
-
-    @Test
-    public void testEnabled() {
-        Configuration config = ConfigurationFactory.getInstance();
-        // enabled
+    public void testGETWhenEnabled() throws Exception {
+        Configuration config = Configuration.getInstance();
         config.setProperty(Key.ADMIN_ENABLED, true);
 
-        ClientResource client = getClientForUriPath(RestletApplication.ADMIN_PATH,
-                USERNAME, SECRET);
-        client.get();
-        assertEquals(Status.SUCCESS_OK, client.getStatus());
+        Response response = client.send();
+        assertEquals(200, response.getStatus());
+    }
 
-        // disabled
+    @Test
+    public void testGETWhenDisabled() throws Exception {
+        Configuration config = Configuration.getInstance();
         config.setProperty(Key.ADMIN_ENABLED, false);
         try {
-            client.get();
+            client.send();
             fail("Expected exception");
         } catch (ResourceException e) {
-            assertEquals(Status.CLIENT_ERROR_FORBIDDEN, client.getStatus());
+            assertEquals(403, e.getStatusCode());
         }
+    }
+
+    @Test
+    public void testGETResponseHeaders() throws Exception {
+        Response response = client.send();
+        Headers headers = response.getHeaders();
+        assertEquals(7, headers.size());
+
+        // Cache-Control
+        assertEquals("no-cache", headers.getFirstValue("Cache-Control"));
+        // Content-Type
+        assertEquals("text/html;charset=UTF-8",
+                headers.getFirstValue("Content-Type"));
+        // Date
+        assertNotNull(headers.getFirstValue("Date"));
+        // Server
+        assertTrue(headers.getFirstValue("Server").contains("Restlet"));
+        // Transfer-Encoding
+        assertEquals("chunked", headers.getFirstValue("Transfer-Encoding"));
+        // Vary
+        List<String> parts =
+                Arrays.asList(StringUtils.split(headers.getFirstValue("Vary"), ", "));
+        assertEquals(5, parts.size());
+        assertTrue(parts.contains("Accept"));
+        assertTrue(parts.contains("Accept-Charset"));
+        assertTrue(parts.contains("Accept-Encoding"));
+        assertTrue(parts.contains("Accept-Language"));
+        assertTrue(parts.contains("Origin"));
+        // X-Powered-By
+        assertEquals(Application.getName() + "/" + Application.getVersion(),
+                headers.getFirstValue("X-Powered-By"));
     }
 
 }

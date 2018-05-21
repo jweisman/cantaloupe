@@ -1,6 +1,7 @@
 package edu.illinois.library.cantaloupe.operation.overlay;
 
 import edu.illinois.library.cantaloupe.test.BaseTest;
+import edu.illinois.library.cantaloupe.test.ConcurrentReaderWriter;
 import edu.illinois.library.cantaloupe.test.TestUtil;
 import edu.illinois.library.cantaloupe.test.WebServer;
 import org.junit.AfterClass;
@@ -8,9 +9,9 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-import java.io.File;
 import java.io.IOException;
-import java.net.URL;
+import java.net.URI;
+import java.util.concurrent.Callable;
 
 import static org.junit.Assert.*;
 
@@ -35,64 +36,53 @@ public class ImageOverlayCacheTest extends BaseTest {
         instance = new ImageOverlayCache();
     }
 
-    // putAndGet(File)
+    // putAndGet(URI)
 
     @Test
-    public void testPutAndGetWithPresentFile() throws IOException {
-        File file = TestUtil.getImage("jpg");
-        byte[] bytes = instance.putAndGet(file);
+    public void testPutAndGetWithPresentFileURI() throws IOException {
+        URI uri = TestUtil.getImage("jpg").toUri();
+        byte[] bytes = instance.putAndGet(uri);
         assertEquals(5439, bytes.length);
     }
 
     @Test
-    public void testPutAndGetWithMissingFile() throws IOException {
+    public void testPutAndGetWithMissingFileURI() {
         try {
-            File file = TestUtil.getImage("blablabla");
-            instance.putAndGet(file);
+            URI uri = TestUtil.getImage("blablabla").toUri();
+            instance.putAndGet(uri);
             fail("Expected exception");
         } catch (IOException e) {
             // pass
         }
     }
 
-    // putAndGet(String)
-
     @Test
-    public void testPutAndGetWithPresentString() throws IOException {
-        File file = TestUtil.getImage("jpg");
-        byte[] bytes = instance.putAndGet(file.getAbsolutePath());
+    public void testPutAndGetWithPresentRemoteURI() throws Exception {
+        URI uri = new URI(webServer.getHTTPURI() + "/jpg");
+        byte[] bytes = instance.putAndGet(uri);
         assertEquals(5439, bytes.length);
     }
 
     @Test
-    public void testPutAndGetWithMissingString() throws IOException {
+    public void testPutAndGetWithMissingRemoteURI() throws Exception {
         try {
-            File file = TestUtil.getImage("blablabla");
-            instance.putAndGet(file.getAbsolutePath());
+            URI uri = new URI(webServer.getHTTPURI() + "/blablabla");
+            instance.putAndGet(uri);
             fail("Expected exception");
         } catch (IOException e) {
             // pass
         }
     }
 
-    // putAndGet(URL)
-
     @Test
-    public void testPutAndGetWithPresentURL() throws IOException {
-        URL url = new URL(webServer.getUri() + "/jpg");
-        byte[] bytes = instance.putAndGet(url.toString());
-        assertEquals(5439, bytes.length);
-    }
-
-    @Test
-    public void testPutAndGetWithMissingURL() {
-        try {
-            URL url = new URL(webServer.getUri() + "/blablabla");
-            instance.putAndGet(url.toString());
-            fail("Expected exception");
-        } catch (IOException e) {
-            // pass
-        }
+    public void testPutAndGetConcurrently() throws Exception {
+        Callable<Void> callable = () -> {
+            URI uri = new URI(webServer.getHTTPURI() + "/jpg");
+            byte[] bytes = instance.putAndGet(uri);
+            assertEquals(5439, bytes.length);
+            return null;
+        };
+        new ConcurrentReaderWriter(callable, callable, 5000).run();
     }
 
 }

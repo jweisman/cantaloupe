@@ -6,8 +6,6 @@
  */
 var Configuration = function(data) {
 
-    var self = this;
-
     /**
      * @returns {*}
      */
@@ -46,6 +44,8 @@ var Configuration = function(data) {
     };
 
 };
+
+Configuration.ENDPOINT = $('input[name=cl-admin-uri]').val() + '/configuration';
 
 /**
  * @param config {Configuration}
@@ -98,14 +98,14 @@ var Form = function(config) {
 
         // Server
         showOrHideAllOtherTableRows(
-            '[name="http.enabled"], [name="https.enabled"], [name="auth.basic.enabled"]');
+            '[name="http.enabled"], [name="https.enabled"]');
         // Endpoints
         showOrHideAllOtherTableRows(
-            '[name="endpoint.iiif.1.enabled"], [name="endpoint.iiif.2.enabled"]');
-        // Resolver
-        $('[name="resolver.delegate"]').on('change', function() {
+            '[name="endpoint.public.auth.basic.enabled"], [name="endpoint.iiif.1.enabled"], [name="endpoint.iiif.2.enabled"]');
+        // Source
+        $('[name="source.delegate"]').on('change', function() {
             var other_rows = $(this).parents('tr').nextAll('tr');
-            if ($(this).val() == 'false') {
+            if ($(this).val() === 'false') {
                 other_rows.show();
             } else {
                 other_rows.hide();
@@ -189,9 +189,9 @@ var Form = function(config) {
         console.debug(config.data());
 
         $.ajax({
-            type: 'POST',
+            type: 'PUT',
             contentType: 'application/json',
-            url: window.location,
+            url: Configuration.ENDPOINT,
             data: config.toJsonString(),
             success: function() {
                 // Set the success message, make it appear, and fade it out on
@@ -229,23 +229,95 @@ var Form = function(config) {
 
 };
 
+var StatusUpdater = function() {
+
+    var STATUS_ENDPOINT = $('input[name=cl-admin-uri]').val() + '/../status';
+
+    this.update = function() {
+        var memoryStatusSection = $('#cl-status-memory');
+        var cacheStatusSection = $('#cl-status-internal-caches');
+        var vmStatusSection = $('#cl-status-vm');
+
+        $.ajax({
+            dataType: 'json',
+            url: STATUS_ENDPOINT,
+            data: null,
+            success: function(data) {
+                // Status section
+                memoryStatusSection.find('tr:nth-child(1) > td:last-child')
+                    .text(data.vm.usedHeap + ' MB');
+                memoryStatusSection.find('tr:nth-child(2) > td:last-child')
+                    .text(data.vm.freeHeap + ' MB');
+                memoryStatusSection.find('tr:nth-child(3) > td:last-child')
+                    .text(data.vm.totalHeap + ' MB');
+                memoryStatusSection.find('tr:nth-child(4) > td:last-child')
+                    .text(data.vm.maxHeap + ' MB');
+
+                var usedPercent = data.vm.usedPercent * 100;
+                var memoryBarClass = 'progress-bar-success';
+                if (usedPercent > 80) {
+                    memoryBarClass = "progress-bar-danger";
+                } else if (usedPercent > 70) {
+                    memoryBarClass = "progress-bar-warning";
+                }
+
+                memoryStatusSection.find('div.progress-bar')
+                    .attr('aria-valuenow', usedPercent)
+                    .removeClass('progress-bar-success progress-bar-warning progress-bar-danger')
+                    .addClass(memoryBarClass)
+                    .css('width', usedPercent + '%')
+                    .find('.sr-only')
+                    .text(usedPercent + '% memory used');
+
+                // Internal Caches section
+                cacheStatusSection.find('tr:nth-child(1) > td:last-child')
+                    .text(data.infoCache.size);
+                cacheStatusSection.find('tr:nth-child(2) > td:last-child')
+                    .text(data.infoCache.maxSize);
+                cacheStatusSection.find('tr:nth-child(3) > td:last-child')
+                    .text(data.delegateMethodInvocationCache.size);
+                cacheStatusSection.find('tr:nth-child(4) > td:last-child')
+                    .text(data.delegateMethodInvocationCache.maxSize);
+
+                // VM info section
+                vmStatusSection.find('tr:last-child > td:last-child')
+                    .text(data.vm.uptime);
+
+            },
+            error: function(xhr, status, error) {
+                console.error(xhr);
+                console.error(status);
+                console.error(error);
+            }
+        });
+    };
+
+};
+
 $(document).ready(function() {
     $('.cl-help').popover({
         placement: 'auto',
         html: true
     });
 
+    var updater = new StatusUpdater();
+    updater.update();
+    setInterval(function() {
+        updater.update();
+    }, 5000);
+
     // Download configuration data into a Configuration instance, and
     // initialize a Form instance on success.
     $.ajax({
         dataType: 'json',
-        url: window.location,
+        url: Configuration.ENDPOINT,
         data: null,
         success: function(data) {
             new Form(new Configuration(data)).load();
         },
         error: function(xhr, status, error) {
             console.error(xhr);
+            console.error(status);
             console.error(error);
             alert('Failed to load the configuration: ' + error);
         }

@@ -3,13 +3,6 @@ layout: manual_3.3
 title: Resolvers
 ---
 
-<ol class="breadcrumb">
-  <li><a href="{{ site.baseurl }}/">Home</a></li>
-  <li><a href="{{ site.baseurl }}/manual/">User Manual</a></li>
-  <li><a href="{{ site.baseurl }}/manual/3.3/">3.3</a></li>
-  <li class="active">Resolvers</li>
-</ol>
-
 <h1>Resolvers</h1>
 
 <ul>
@@ -117,9 +110,13 @@ FilesystemResolver.BasicLookupStrategy.path_suffix =
 <p>An identifier of <code>image.jpg</code> in the URL will resolve to
 <span class="filename">/usr/local/images/image.jpg</span>.</p>
 
+<p>It's also possible to include a partial path in the identifier using URL-encoded slashes (<code>%2F</code>) as path separators. <code>subdirectory%2Fimage.jpg</code> in the URL would then resolve to <span class="filename">/usr/local/images/subdirectory/image.jpg</span>.</p>
+
+<div class="alert alert-info">If you are operating behind a reverse proxy that is not capable of passing encoded URL characters through without decoding them, see the <code>slash_substitude</code> configuration key.</div>
+
 <p>To prevent arbitrary directory traversal, BasicLookupStrategy will strip out <code>..{path separator}</code> and <code>{path separator}..</code> from identifiers before resolving the path.</p>
 
-<div class="alert alert-danger">Note: it is dangerous to <strong>not</strong> use <code>path_prefix</code>. The shallower the path, the more of the filesystem that will be exposed.</div>
+<div class="alert alert-danger">Note: it may be dangerous to <strong>not</strong> use <code>path_prefix</code>. The shallower the path, the more of the filesystem that will be exposed.</div>
 
 <h4 id="FilesystemResolverScriptLookupStrategy">ScriptLookupStrategy</h4>
 
@@ -244,6 +241,10 @@ HttpResolver.url_suffix =
 <p>An identifier of <code>image.jpg</code> in the URL will resolve to
 <span class="filename">http://example.org/images/image.jpg</span>.
 
+<p>It's also possible to include a partial path in the identifier using URL-encoded slashes (<code>%2F</code>) as path separators. <code>subdirectory%2Fimage.jpg</code> in the URL would then resolve to <span class="filename">http://example.org/images/subdirectory/image.jpg</span>.</p>
+
+<div class="alert alert-info">If you are operating behind a reverse proxy that is not capable of passing encoded URL characters through without decoding them, see the <code>slash_substitude</code> configuration key.</div>
+
 <h4 id="HttpResolverScriptLookupStrategy">ScriptLookupStrategy</h4>
 
 <p>Sometimes, BasicLookupStrategy will not offer enough control. Perhaps you want to serve images from multiple URLs, or perhaps your identifiers are opaque and you need to run a database or web service request to locate them.  With this lookup strategy, you can tell HttpResolver to invoke a method in your <a href="delegate-script.html">delegate script</a> and capture the URL it returns.</p>
@@ -339,7 +340,7 @@ end
   <dt><code>AmazonS3Resolver.bucket.name</code></dt>
   <dd>Name of the bucket containing the images to be served.</dd>
   <dt><code>AmazonS3Resolver.bucket.region</code></dt>
-  <dd>Name of a region to send requests to, such as <code>us-east-1</code>. Can be commented out or left blank to use a default region. (See <a href="http://docs.aws.amazon.com/general/latest/gr/rande.html#s3_region">S3 Regions</a>.)</dd>
+  <dd>Name of a region to send requests to, such as <code>us-east-1</code>. Can be commented out or left blank to use a default region. (See <a href="https://docs.aws.amazon.com/general/latest/gr/rande.html#s3_region">S3 Regions</a>.)</dd>
   <dt><code>AmazonS3Resolver.lookup_strategy</code></dt>
   <dd>The strategy to use to look up images based on their URL identifier. See below.</dd>
 </dl>

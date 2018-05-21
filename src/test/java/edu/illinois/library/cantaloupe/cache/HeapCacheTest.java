@@ -2,7 +2,6 @@ package edu.illinois.library.cantaloupe.cache;
 
 import edu.illinois.library.cantaloupe.config.ConfigurationException;
 import edu.illinois.library.cantaloupe.config.Key;
-import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.image.Info;
 import edu.illinois.library.cantaloupe.test.BaseTest;
 import edu.illinois.library.cantaloupe.config.Configuration;
@@ -18,7 +17,7 @@ import java.nio.file.Path;
 
 import static org.junit.Assert.*;
 
-public class HeapCacheTest extends BaseTest {
+public class HeapCacheTest extends AbstractCacheTest {
 
     public static class KeyTest extends BaseTest {
 
@@ -69,12 +68,16 @@ public class HeapCacheTest extends BaseTest {
     public void setUp() throws Exception {
         super.setUp();
 
+        instance = newInstance();
+        assertFalse(instance.isDirty());
+    }
+
+    @Override
+    HeapCache newInstance() {
         Configuration config = Configuration.getInstance();
         config.setProperty(Key.HEAPCACHE_TARGET_SIZE, Math.pow(1024, 2));
-        config.setProperty(Key.CACHE_SERVER_TTL, 0);
 
-        instance = new HeapCache();
-        assertFalse(instance.isDirty());
+        return new HeapCache();
     }
 
     /* dumpToPersistentStore() */
@@ -84,16 +87,15 @@ public class HeapCacheTest extends BaseTest {
         Configuration config = Configuration.getInstance();
         config.setProperty(Key.HEAPCACHE_PERSIST, true);
 
-        Path cacheFile = Files.createTempFile("cantaloupe", "tmp");
+        Path cacheFile = Files.createTempFile("heapcache", "tmp");
         try {
             Files.delete(cacheFile);
             config.setProperty(Key.HEAPCACHE_PATHNAME, cacheFile.toString());
 
             // Seed an image
-            Identifier id1 = new Identifier("cats");
-            OperationList ops1 = new OperationList(id1, Format.JPG);
-            try (OutputStream os = instance.newDerivativeImageOutputStream(ops1)) {
-                Files.copy(TestUtil.getImage(IMAGE).toPath(), os);
+            OperationList ops = new OperationList(new Identifier("cats"));
+            try (OutputStream os = instance.newDerivativeImageOutputStream(ops)) {
+                Files.copy(TestUtil.getImage(IMAGE), os);
             }
 
             instance.dumpToPersistentStore();
@@ -118,39 +120,34 @@ public class HeapCacheTest extends BaseTest {
 
         // Seed an image
         Identifier id1 = new Identifier("cats");
-        OperationList ops1 = new OperationList(id1, Format.JPG);
-        try (OutputStream os = instance.newDerivativeImageOutputStream(ops1)) {
-            Files.copy(TestUtil.getImage(IMAGE).toPath(), os);
+        OperationList ops = new OperationList(id1);
+        try (OutputStream os = instance.newDerivativeImageOutputStream(ops)) {
+            Files.copy(TestUtil.getImage(IMAGE), os);
         }
 
         assertEquals(5439, instance.getByteSize());
 
         // Seed an info
-        Info info = new Info(52, 52);
+        Info info = new Info();
         instance.put(id1, info);
 
-        assertEquals(5439 + info.toJson().length(), instance.getByteSize());
+        assertEquals(5439 + info.toJSON().length(), instance.getByteSize());
     }
 
     /* getImageInfo(Identifier) */
 
+    /**
+     * Override that does nothing as this cache does not invalidate on the
+     * basis of age.
+     */
     @Test
-    public void testGetImageInfo() throws CacheException {
-        // existing image
-        Identifier identifier = new Identifier("cats");
-        Info info = new Info(50, 40);
-        instance.put(identifier, info);
-        Info actual = instance.getImageInfo(identifier);
-        assertEquals(actual, info);
-
-        // nonexistent image
-        assertNull(instance.getImageInfo(new Identifier("bogus")));
-    }
+    @Override
+    public void testGetImageInfoWithExistingInvalidImage() {}
 
     /* getTargetByteSize() */
 
     @Test
-    public void testGetTargetByteSizeWithInvalidValue() throws Exception {
+    public void testGetTargetByteSizeWithInvalidValue() {
         final Configuration config = Configuration.getInstance();
         config.setProperty(Key.HEAPCACHE_TARGET_SIZE, "");
         try {
@@ -199,6 +196,19 @@ public class HeapCacheTest extends BaseTest {
         assertEquals(base * (long) Math.pow(1024, 5), instance.getTargetByteSize(), delta);
     }
 
+    /* isPersistenceEnabled() */
+
+    @Test
+    public void testIsPersistenceEnabled() {
+        Configuration config = Configuration.getInstance();
+
+        config.setProperty(Key.HEAPCACHE_PERSIST, true);
+        assertTrue(instance.isPersistenceEnabled());
+
+        config.setProperty(Key.HEAPCACHE_PERSIST, false);
+        assertFalse(instance.isPersistenceEnabled());
+    }
+
     /* loadFromPersistentStore() */
 
     @Test
@@ -206,16 +216,15 @@ public class HeapCacheTest extends BaseTest {
         Configuration config = Configuration.getInstance();
         config.setProperty(Key.HEAPCACHE_PERSIST, true);
 
-        Path cacheFile = Files.createTempFile("cantaloupe", "tmp");
+        Path cacheFile = Files.createTempFile("heapcache", "tmp");
         try {
             Files.delete(cacheFile);
             config.setProperty(Key.HEAPCACHE_PATHNAME, cacheFile.toString());
 
             // Seed an image
-            Identifier id1 = new Identifier("cats");
-            OperationList ops1 = new OperationList(id1, Format.JPG);
-            try (OutputStream os = instance.newDerivativeImageOutputStream(ops1)) {
-                Files.copy(TestUtil.getImage(IMAGE).toPath(), os);
+            OperationList ops = new OperationList(new Identifier("cats"));
+            try (OutputStream os = instance.newDerivativeImageOutputStream(ops)) {
+                Files.copy(TestUtil.getImage(IMAGE), os);
             }
 
             instance.dumpToPersistentStore();
@@ -224,7 +233,7 @@ public class HeapCacheTest extends BaseTest {
             instance.loadFromPersistentStore();
             assertEquals(1, instance.size());
 
-            assertNotNull(instance.newDerivativeImageInputStream(ops1));
+            assertNotNull(instance.newDerivativeImageInputStream(ops));
         } finally {
             Files.deleteIfExists(cacheFile);
         }
@@ -232,94 +241,22 @@ public class HeapCacheTest extends BaseTest {
 
     /* newDerivativeImageInputStream(OperationList) */
 
+    /**
+     * Override that does nothing as this cache does not invalidate on the
+     * basis of age.
+     */
+    @Override
     @Test
-    public void testNewDerivativeImageInputStream() throws Exception {
-        OperationList ops = new OperationList(new Identifier("cats"), Format.JPG);
-
-        // Doesn't exist yet
-        assertNull(instance.newDerivativeImageInputStream(ops));
-
-        try (OutputStream os = instance.newDerivativeImageOutputStream(ops)) {
-            Files.copy(TestUtil.getImage(IMAGE).toPath(), os);
-        }
-
-        // Now it should.
-        assertNotNull(instance.newDerivativeImageInputStream(ops));
-    }
+    public void testNewDerivativeImageInputStreamWithNonzeroTTL() {}
 
     /* newDerivativeImageOutputStream(OperationList) */
 
     @Test
-    public void testNewDerivativeImageOutputStream() throws Exception {
-        OperationList ops = TestUtil.newOperationList();
-        ops.setIdentifier(new Identifier("cats"));
-        assertNotNull(instance.newDerivativeImageOutputStream(ops));
-    }
+    public void testNewDerivativeImageOutputStreamSetsDirtyFlag() {
+        OperationList ops = new OperationList(new Identifier("cats"));
 
-    @Test
-    public void testNewDerivativeImageOutputStreamSetsDirtyFlag()
-            throws Exception {
-        OperationList ops = TestUtil.newOperationList();
-        ops.setIdentifier(new Identifier("cats"));
         instance.newDerivativeImageOutputStream(ops);
         assertTrue(instance.isDirty());
-    }
-
-    /* purge() */
-
-    @Test
-    public void testPurge() throws Exception {
-        // Seed a derivative image
-        Identifier id1 = new Identifier("cats");
-        OperationList ops1 = new OperationList(id1, Format.JPG);
-        try (OutputStream os = instance.newDerivativeImageOutputStream(ops1)) {
-            Files.copy(TestUtil.getImage(IMAGE).toPath(), os);
-        }
-        // Seed an info
-        instance.put(id1, new Info(50, 40));
-
-        instance.purge();
-
-        // assert that only the expired derivative images were purged
-        assertNull(instance.getImageInfo(id1));
-        assertNull(instance.newDerivativeImageInputStream(ops1));
-    }
-
-    /* purge(OperationList) */
-
-    @Test
-    public void testPurgeWithOperationList() throws Exception {
-        // Seed a derivative image
-        Identifier id1 = new Identifier("cats");
-        OperationList ops = new OperationList(id1, Format.JPG);
-        try (OutputStream os = instance.newDerivativeImageOutputStream(ops)) {
-            Files.copy(TestUtil.getImage(IMAGE).toPath(), os);
-        }
-
-        instance.purge(ops);
-
-        assertNull(instance.newDerivativeImageInputStream(ops));
-    }
-
-    /* purge(Identifier) */
-
-    @Test
-    public void testPurgeWithIdentifier() throws Exception {
-        // Seed a derivative image
-        Identifier id1 = new Identifier("cats");
-        OperationList ops = new OperationList(id1, Format.JPG);
-
-        try (OutputStream os = instance.newDerivativeImageOutputStream(ops)) {
-            Files.copy(TestUtil.getImage(IMAGE).toPath(), os);
-        }
-
-        // Seed an info
-        instance.put(id1, new Info(60, 40));
-
-        instance.purge(id1);
-
-        assertNull(instance.getImageInfo(id1));
-        assertNull(instance.newDerivativeImageInputStream(ops));
     }
 
     /* purgeExcess() */
@@ -330,10 +267,9 @@ public class HeapCacheTest extends BaseTest {
         config.setProperty(Key.HEAPCACHE_TARGET_SIZE, 5000);
 
         // Seed an image
-        Identifier id1 = new Identifier("cats");
-        OperationList ops1 = new OperationList(id1, Format.JPG);
-        try (OutputStream os = instance.newDerivativeImageOutputStream(ops1)) {
-            Files.copy(TestUtil.getImage(IMAGE).toPath(), os);
+        OperationList ops = new OperationList(new Identifier("cats"));
+        try (OutputStream os = instance.newDerivativeImageOutputStream(ops)) {
+            Files.copy(TestUtil.getImage(IMAGE), os);
         }
 
         assertEquals(5439, instance.getByteSize());
@@ -350,10 +286,9 @@ public class HeapCacheTest extends BaseTest {
         config.setProperty(Key.HEAPCACHE_TARGET_SIZE, 10000);
 
         // Seed an image
-        Identifier id1 = new Identifier("cats");
-        OperationList ops1 = new OperationList(id1, Format.JPG);
-        try (OutputStream os = instance.newDerivativeImageOutputStream(ops1)) {
-            Files.copy(TestUtil.getImage(IMAGE).toPath(), os);
+        OperationList ops = new OperationList(new Identifier("cats"));
+        try (OutputStream os = instance.newDerivativeImageOutputStream(ops)) {
+            Files.copy(TestUtil.getImage(IMAGE), os);
         }
 
         long size = instance.getByteSize();
@@ -365,32 +300,22 @@ public class HeapCacheTest extends BaseTest {
         assertEquals(size, instance.getByteSize());
     }
 
-    @Test
+    @Test(expected = ConfigurationException.class)
     public void testPurgeExcessThrowsConfigurationExceptionWhenMaxSizeIsInvalid()
             throws Exception {
         Configuration config = Configuration.getInstance();
         config.setProperty(Key.HEAPCACHE_TARGET_SIZE, 0);
-        try {
-            instance.purgeExcess();
-            fail("Expected exception");
-        } catch (ConfigurationException e) {
-            // pass
-        }
+        instance.purgeExcess();
     }
 
-    /* put(Identifier, Info) */
+    /* purgeInvalid() */
 
+    /**
+     * Override that does nothing as this cache does not invalidate on the
+     * basis of age.
+     */
+    @Override
     @Test
-    public void testPut() throws CacheException {
-        // Test with existing info
-        Identifier identifier = new Identifier("birds");
-        Info info = new Info(52, 52);
-        instance.put(identifier, info);
-        assertEquals(info, instance.getImageInfo(identifier));
-        assertTrue(instance.isDirty());
-
-        // Test with missing info
-        assertNull(instance.getImageInfo(new Identifier("bogus")));
-    }
+    public void testPurgeInvalid() {}
 
 }

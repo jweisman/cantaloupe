@@ -3,13 +3,6 @@ layout: manual_3.4
 title: Processors
 ---
 
-<ol class="breadcrumb">
-  <li><a href="{{ site.baseurl }}/">Home</a></li>
-  <li><a href="{{ site.baseurl }}/manual/">User Manual</a></li>
-  <li><a href="{{ site.baseurl }}/manual/3.4/">3.4</a></li>
-  <li class="active">Processors</li>
-</ol>
-
 <h1>Processors</h1>
 
 <ul>
@@ -31,15 +24,15 @@ title: Processors
   </li>
 </ul>
 
-<p>Processors are responsible for reading source images from <a href="resolvers.html">resolvers</a> and transforming them according to request parameters. Processors are modular and pluggable. Particular processors can be assigned to handle particular source formats, and a fallback processor can be assigned to all others.</p>
+<p>Processors read source images from <a href="resolvers.html">resolvers</a> and transform them according to request parameters. Particular processors can be assigned to handle particular source formats, and a fallback processor can be assigned to all others.</p>
 
 <p>Different processors have different quality, compatibility, dependency, and performance characteristics. The ability to choose among different processors is intended to make it easy to add support for new image formats; improve support for existing image formats via the substitution of better codecs; and decouple the image server implementation from any one codec.</p>
 
-<p>In terms of format support, a distinction is made between the concepts of source format and output format. Available output formats may differ on a per-platform or per-instance basis depending on the source format.</p>
+<p>In terms of format support, a distinction is made between the concepts of source format and output format. Available output formats may differ on a per-processor basis depending on the source format.</p>
 
 <p>Supported source formats depend on the processor, and possibly installed
 libraries/delegates, etc., as well. Lists of these are displayed on the
-landing page, as well as in one of the tables below. A list of output formats supported <em>for a given source format</em> is contained within the response to an information request (such as <span class="filename">/iiif/2/{identifier}/info.json</span>).</p>
+landing page, as well as in one of the tables below. A list of output formats supported <em>for a given source format</em> is contained within the response to an information request (such as <span class="filename">/iiif/2/:identifier/info.json</span>).</p>
 
 <hr>
 
@@ -365,7 +358,18 @@ landing page, as well as in one of the tables below. A list of output formats su
     <td class="text-center bg-success">&check;</td>
   </tr>
   <tr>
-    <td>Overlays</td>
+    <td>Image overlays</td>
+    <td class="text-center bg-danger"></td>
+    <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-success">&check;</td>
+  </tr>
+  <tr>
+    <td>String overlays</td>
     <td class="text-center bg-danger"></td>
     <td class="text-center bg-danger"></td>
     <td class="text-center bg-success">&check;</td>
@@ -446,7 +450,7 @@ landing page, as well as in one of the tables below. A list of output formats su
     <td class="text-center bg-success">&check;</td>
     <td class="text-center bg-success">&check;</td>
     <td class="text-center bg-success">&check;</td>
-    <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-danger"></td>
     <td class="text-center bg-success">&check;</td>
     <td class="text-center bg-success">&check;</td>
     <td class="text-center bg-success">&check;</td>
@@ -461,6 +465,17 @@ landing page, as well as in one of the tables below. A list of output formats su
     <td class="text-center bg-success">&check;</td>
     <td class="text-center bg-success">&check;</td>
     <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-success">&check;</td>
+  </tr>
+  <tr>
+    <td>&gt; 8-bit output</td>
+    <td class="text-center bg-danger"></td>
+    <td class="text-center bg-danger"></td>
+    <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-success">&check;</td>
+    <td class="text-center bg-danger"></td>
+    <td class="text-center bg-danger"></td>
     <td class="text-center bg-success">&check;</td>
   </tr>
   <tr>
@@ -540,8 +555,8 @@ landing page, as well as in one of the tables below. A list of output formats su
   </tr>
   <tr>
     <td>PDF</td>
-    <td class="bg-warning">Requires plugin; no source DPI control</td>
-    <td class="bg-warning">Requires delegate; no source DPI control</td>
+    <td class="bg-success">Requires plugin</td>
+    <td class="bg-success">Requires delegate</td>
     <td class="text-center bg-danger">&times;</td>
     <td class="text-center bg-danger">&times;</td>
     <td class="text-center bg-danger">&times;</td>
@@ -552,15 +567,6 @@ landing page, as well as in one of the tables below. A list of output formats su
     <td class="text-center bg-success">&check;</td>
     <td class="text-center bg-success">&check;</td>
     <td class="text-center bg-success">&check;</td>
-    <td class="text-center bg-danger">&times;</td>
-    <td class="text-center bg-danger">&times;</td>
-    <td class="text-center bg-danger">&times;</td>
-  </tr>
-  <tr>
-    <td>SGI</td>
-    <td class="text-center bg-danger">&times;</td>
-    <td class="text-center bg-success">&check;</td>
-    <td class="text-center bg-danger">&times;</td>
     <td class="text-center bg-danger">&times;</td>
     <td class="text-center bg-danger">&times;</td>
     <td class="text-center bg-danger">&times;</td>
@@ -605,12 +611,10 @@ landing page, as well as in one of the tables below. A list of output formats su
 
 <p>As JaiProcessor uses the same ImageIO readers and writers as Java2dProcessor, it can read and write the same formats.</p>
 
-<p>Years ago, Sun published <a href="http://www.oracle.com/technetwork/java/javasebusiness/downloads/java-archive-downloads-java-client-419417.html">platform-native accelerator JARs</a> called <a href="http://www.oracle.com/technetwork/java/install-1-1-2-135866.html">mediaLib</a> for Windows, Linux, and Solaris, which improved JAI's performance. It is unknown whether these still work on modern platforms, or what degree of benefit they provide.</p>
-
 <div class="alert alert-info">
   <p>Note: When using this processor, it is normal to see the following log message:</p>
   <blockquote>Error: Could not find mediaLib accelerator wrapper classes. Continuing in pure Java mode.</blockquote>
-  <p>This is caused by the absence of a mediaLib JAR on the classpath, and is harmless. Add the <code>-Dcom.sun.media.jai.disableMediaLib=true</code> VM option to suppress it.</p>
+  <p>This is caused by the absence of a mediaLib JAR on the classpath, and is harmless and expected. Add the <code>-Dcom.sun.media.jai.disableMediaLib=true</code> VM option to suppress it.</p>
 </div>
 
 <hr>
@@ -624,6 +628,14 @@ landing page, as well as in one of the tables below. A list of output formats su
 
 <p>GraphicsMagickProcessor is usually faster than <a href="#ImageMagickProcessor">ImageMagickProcessor</a>. However, like ImageMagickProcessor, it is neither tile- nor multi-resolution-aware and thus fares poorly with large images.</p>
 
+<h4>Optional Arguments</h4>
+
+<p>GraphicsMagickProcessor supports a <code>page</code> URL query argument (which is nonstandard and Cantaloupe-specific) which can be used to return a particular page of a PDF. For example:</p>
+
+<pre>http://example.org/iiif/2/document.pdf/full/full/0/default.jpg?page=2</pre>
+
+<p>If the <code>page</code> argument is missing, the first page will be returned.</p>
+
 <hr>
 
 <h3 id="ImageMagickProcessor">ImageMagickProcessor</h3>
@@ -634,12 +646,20 @@ landing page, as well as in one of the tables below. A list of output formats su
 
 <p>ImageMagick offers excellent output quality at the expense of performance, which suffers increasingly as image size increases.</p>
 
+<h4>Optional Arguments</h4>
+
+<p>ImageMagickProcessor supports a <code>page</code> URL query argument (which is nonstandard and Cantaloupe-specific) which can be used to return a particular page of a PDF. For example:</p>
+
+<pre>http://example.org/iiif/2/document.pdf/full/full/0/default.jpg?page=2</pre>
+
+<p>If the <code>page</code> argument is missing, the first page will be returned.</p>
+
 <hr>
 
 <h3 id="KakaduProcessor">KakaduProcessor</h3>
 
 <p>KakaduProcessor uses the <span class="filename">kdu_expand</span> and <span class="filename">kdu_jp2info</span> binaries from the
-<a href="http://www.kakadusoftware.com">Kakadu</a> SDK to efficiently decode JPEG2000 source images. This processor is capable of performing well even with large JP2s. Kakadu is extensively optimized and will make use of all available CPU cores.</p>
+<a href="http://kakadusoftware.com">Kakadu</a> SDK to efficiently decode JPEG2000 source images. This processor is capable of performing well even with large JP2s. Kakadu is extensively optimized and will make use of all available CPU cores.</p>
 
 <p><span class="filename">kdu_expand</span> is mainly a decompression tool, and Cantaloupe uses only its cropping and level-reduction features. All other operations (differential scaling, rotation, etc.) are performed using Java 2D.</p>
 
@@ -668,13 +688,13 @@ landing page, as well as in one of the tables below. A list of output formats su
 
 <p>Prior to Cantaloupe 3.3, FFmpeg itself handled all post-processing steps. Now, it is used only to decode still frames, and all subsequent steps are handled by Java 2D.</p>
 
-<h4>Optional Parameters</h4>
+<h4>Optional Arguments</h4>
 
-<p>FFmpegProcessor supports a <code>time</code> URL query parameter (which is nonstandard and Cantaloupe-specific) which can be used to return a frame at a particular second in the source video. The value of this parameter should be in <code>hh:mm:ss</code> format, like:</p>
+<p>FFmpegProcessor supports a <code>time</code> URL query argument (which is nonstandard and Cantaloupe-specific) which can be used to return a frame at a particular second in the source video. The value of this parameter should be in <code>hh:mm:ss</code> format, like:</p>
 
 <pre>http://example.org/iiif/2/video.mp4/full/full/0/default.jpg?time=00:02:15</pre>
 
-<p>If the <code>time</code> parameter is missing, the first frame will be returned.</p>
+<p>If the <code>time</code> argument is missing, the first frame will be returned.</p>
 
 <hr>
 
@@ -686,10 +706,10 @@ landing page, as well as in one of the tables below. A list of output formats su
 
 <p>The size of the default raster image, corresponding to a scale of one, is configurable with the <code>PdfBoxProcessor.dpi</code> configuration option. When a request asks for a scale of &le; 50% or &ge; 200%, a fraction or multiple of this will be used, respectively, in order to improve efficiency at small scales, and detail at large scales.</p>
 
-<h4>Optional Parameters</h4>
+<h4>Optional Arguments</h4>
 
-<p>PdfBoxProcessor supports a <code>page</code> URL query parameter (which is nonstandard and Cantaloupe-specific) which can be used to return a particular page of a PDF. For example:</p>
+<p>PdfBoxProcessor supports a <code>page</code> URL query argument (which is nonstandard and Cantaloupe-specific) which can be used to return a particular page of a PDF. For example:</p>
 
 <pre>http://example.org/iiif/2/document.pdf/full/full/0/default.jpg?page=2</pre>
 
-<p>If the <code>page</code> parameter is missing, the first page will be returned.</p>
+<p>If the <code>page</code> argument is missing, the first page will be returned.</p>

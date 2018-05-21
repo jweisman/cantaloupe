@@ -1,32 +1,30 @@
 package edu.illinois.library.cantaloupe.resource.iiif.v1;
 
-import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 
 import edu.illinois.library.cantaloupe.RestletApplication;
-import edu.illinois.library.cantaloupe.cache.Cache;
-import edu.illinois.library.cantaloupe.cache.CacheFactory;
-import edu.illinois.library.cantaloupe.cache.DerivativeFileCache;
-import edu.illinois.library.cantaloupe.config.ConfigurationFactory;
+import edu.illinois.library.cantaloupe.cache.CacheFacade;
+import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.image.Identifier;
+import edu.illinois.library.cantaloupe.image.Info;
 import edu.illinois.library.cantaloupe.processor.Processor;
 import edu.illinois.library.cantaloupe.processor.ProcessorFactory;
-import edu.illinois.library.cantaloupe.resolver.Resolver;
-import edu.illinois.library.cantaloupe.resolver.ResolverFactory;
+import edu.illinois.library.cantaloupe.source.Source;
+import edu.illinois.library.cantaloupe.source.SourceFactory;
 import edu.illinois.library.cantaloupe.resource.JSONRepresentation;
-import edu.illinois.library.cantaloupe.resource.SourceImageWrangler;
-import org.restlet.Request;
-import org.restlet.data.Header;
+import edu.illinois.library.cantaloupe.processor.ProcessorConnector;
 import org.restlet.data.MediaType;
 import org.restlet.data.Preference;
 import org.restlet.data.Reference;
 import org.restlet.representation.EmptyRepresentation;
 import org.restlet.representation.Representation;
 import org.restlet.resource.Get;
-import org.restlet.util.Series;
 
 /**
  * Handles IIIF Image API 1.x information requests.
@@ -37,18 +35,17 @@ import org.restlet.util.Series;
 public class InformationResource extends IIIF1Resource {
 
     /**
-     * Redirects /{identifier} to /{identifier}/info.json, respecting the
-     * Servlet context root.
+     * Redirects {@literal /:identifier} to {@literal /:identifier/info.json},
+     * respecting the Servlet context root and {@link
+     * #PUBLIC_IDENTIFIER_HEADER} header.
      */
     public static class RedirectingResource extends IIIF1Resource {
         @Get
         public Representation doGet() {
-            final Request request = getRequest();
-            final String identifier = (String) request.getAttributes().
-                    get("identifier");
             final Reference newRef = new Reference(
-                    getPublicRootRef(request.getRootRef(), request.getHeaders()) +
-                            RestletApplication.IIIF_1_PATH + "/" + identifier +
+                    getPublicRootReference() +
+                            RestletApplication.IIIF_1_PATH + "/" +
+                            getPublicIdentifier() +
                             "/info.json");
             redirectSeeOther(newRef);
             return new EmptyRepresentation();
@@ -59,92 +56,142 @@ public class InformationResource extends IIIF1Resource {
      * Responds to information requests.
      *
      * @return {@link ImageInfo} instance serialized to JSON.
-     * @throws Exception
      */
     @Get
     public Representation doGet() throws Exception {
-        Map<String,Object> attrs = this.getRequest().getAttributes();
-        Identifier identifier = new Identifier(
-                Reference.decode((String) attrs.get("identifier")));
-        identifier = decodeSlashes(identifier);
+        final Configuration config = Configuration.getInstance();
+        final Identifier identifier = getIdentifier();
+        final CacheFacade cacheFacade = new CacheFacade();
 
-        // Get the resolver
-        Resolver resolver = new ResolverFactory().getResolver(identifier);
-        // Determine the format of the source image
-        Format format = Format.UNKNOWN;
-        try {
-            // Determine the format of the source image
-            format = resolver.getSourceFormat();
-        } catch (FileNotFoundException e) {
-            if (ConfigurationFactory.getInstance().
-                    getBoolean(Key.CACHE_SERVER_PURGE_MISSING, false)) {
-                // if the image was not found, purge it from the cache
-                final Cache cache = CacheFactory.getDerivativeCache();
-                if (cache != null) {
-                    cache.purge(identifier);
+        // If we don't need to resolve first, and are using a cache, and the
+        // cache contains an info matching the request, skip all the setup and
+        // just return the cached info.
+        if (!isResolvingFirst()) {
+            try {
+                Info info = cacheFacade.getInfo(identifier);
+                if (info != null) {
+                    // The source format will be null or UNKNOWN if the info was
+                    // serialized in version < 3.4.
+                    final Format format = info.getSourceFormat();
+                    if (format != null && !Format.UNKNOWN.equals(format)) {
+                        final Processor processor = new ProcessorFactory().
+                                newProcessor(format);
+                        final Info.Image infoImage =
+                                info.getImages().get(getPageIndex());
+                        final ImageInfo imageInfo =
+                                new ImageInfoFactory().newImageInfo(
+                                        getImageURI(), processor, infoImage,
+                                        info.getNumResolutions());
+                        addLinkHeader(imageInfo);
+                        commitCustomResponseHeaders();
+                        return newRepresentation(imageInfo);
+                    }
                 }
-            }
-            throw e;
-        }
-
-        // Obtain an instance of the processor assigned to that format in
-        // the config file
-        final Processor processor = new ProcessorFactory().getProcessor(format);
-
-        new SourceImageWrangler(resolver, processor, identifier).wrangle();
-
-        // If the cache is enabled and is file-based, add an X-Sendfile header.
-        final Cache cache = CacheFactory.getDerivativeCache();
-        if (cache instanceof DerivativeFileCache) {
-            DerivativeFileCache fileCache = (DerivativeFileCache) cache;
-            if (fileCache.infoExists(identifier)) {
-                final String relativePathname =
-                        ((DerivativeFileCache) cache).getRelativePathname(identifier);
-                addXSendfileHeader(relativePathname);
+            } catch (IOException e) {
+                // Don't rethrow -- it's still possible to service the request.
+                getLogger().severe(e.getMessage());
             }
         }
 
-        // Get an Info instance corresponding to the source image
-        ImageInfo imageInfo = ImageInfoFactory.newImageInfo(
-                getImageUri(identifier), processor,
-                getOrReadInfo(identifier, processor));
+        final Source source = new SourceFactory().newSource(
+                identifier, getDelegateProxy());
 
-        getResponse().getHeaders().add("Link",
-                String.format("<%s>;rel=\"profile\";", imageInfo.profile));
+        // If we are resolving first, or if the source image is not present in
+        // the source cache (if enabled), check access to it in preparation for
+        // retrieval.
+        final Path sourceImage = cacheFacade.getSourceCacheFile(identifier);
+        if (sourceImage == null || isResolvingFirst()) {
+            try {
+                source.checkAccess();
+            } catch (NoSuchFileException e) { // this needs to be rethrown!
+                if (config.getBoolean(Key.CACHE_SERVER_PURGE_MISSING, false)) {
+                    // If the image was not found, purge it from the cache.
+                    cacheFacade.purgeAsync(identifier);
+                }
+                throw e;
+            }
+        }
 
-        // Add client cache directives if configured to do so. We do this later
-        // rather than sooner to prevent them from being sent along with an
-        // error response.
-        getResponseCacheDirectives().addAll(getCacheDirectives());
-
-        JSONRepresentation rep = new JSONRepresentation(imageInfo);
-
-        // If the client has requested JSON-LD, set the content type to
-        // that; otherwise set it to JSON
-        List<Preference<MediaType>> preferences = this.getRequest().
-                getClientInfo().getAcceptedMediaTypes();
-        if (preferences.get(0) != null && preferences.get(0).toString().
-                startsWith("application/ld+json")) {
-            rep.setMediaType(new MediaType("application/ld+json"));
+        // Get the format of the source image.
+        // If we are not resolving first, and there is a hit in the source
+        // cache, read the format from the source-cached-file, as we will
+        // expect source cache access to be more efficient.
+        // Otherwise, read it from the source.
+        Format format = Format.UNKNOWN;
+        if (!isResolvingFirst() && sourceImage != null) {
+            List<edu.illinois.library.cantaloupe.image.MediaType> mediaTypes =
+                    edu.illinois.library.cantaloupe.image.MediaType.detectMediaTypes(sourceImage);
+            if (!mediaTypes.isEmpty()) {
+                format = mediaTypes.get(0).toFormat();
+            }
         } else {
-            rep.setMediaType(new MediaType("application/json"));
+            format = source.getFormat();
         }
 
-        return rep;
+        // Obtain an instance of the processor assigned to that format.
+        try (Processor processor = new ProcessorFactory().newProcessor(format)) {
+            // Connect it to the source.
+            tempFileFuture = new ProcessorConnector().connect(
+                    source, processor, identifier, format);
+
+            final Info info = getOrReadInfo(identifier, processor);
+            final Info.Image infoImage = info.getImages().get(getPageIndex());
+            final ImageInfo imageInfo = new ImageInfoFactory().newImageInfo(
+                    getImageURI(), processor, infoImage,
+                    info.getNumResolutions());
+
+            addLinkHeader(imageInfo);
+            commitCustomResponseHeaders();
+            return newRepresentation(imageInfo);
+        }
+    }
+
+    private void addLinkHeader(ImageInfo info) {
+        getBufferedResponseHeaders().add("Link",
+                String.format("<%s>;rel=\"profile\";", info.profile));
     }
 
     /**
-     * @param identifier
      * @return Full image URI corresponding to the given identifier, respecting
-     *         the X-Forwarded-* and X-IIIF-ID reverse proxy headers.
+     *         the {@literal X-Forwarded-*} and
+     *         {@link #PUBLIC_IDENTIFIER_HEADER} reverse proxy headers.
      */
-    private String getImageUri(Identifier identifier) {
-        final Series<Header> headers = getRequest().getHeaders();
-        final String identifierStr = headers.getFirstValue(
-                "X-IIIF-ID", true, identifier.toString());
-        return getPublicRootRef(getRequest().getRootRef(), headers) +
-                RestletApplication.IIIF_1_PATH + "/" +
-                Reference.encode(identifierStr);
+    private String getImageURI() {
+        return getPublicRootReference() + RestletApplication.IIIF_1_PATH + "/" +
+                getPublicIdentifier();
+    }
+
+    private MediaType getNegotiatedMediaType() {
+        MediaType mediaType;
+        // If the client has requested JSON-LD, set the content type to
+        // that; otherwise set it to JSON.
+        List<Preference<MediaType>> preferences = getRequest().getClientInfo().
+                getAcceptedMediaTypes();
+        if (preferences.get(0) != null && preferences.get(0).toString().
+                startsWith("application/ld+json")) {
+            mediaType = new MediaType("application/ld+json");
+        } else {
+            mediaType = new MediaType("application/json");
+        }
+        return mediaType;
+    }
+
+    private boolean isResolvingFirst() {
+        return Configuration.getInstance().
+                getBoolean(Key.CACHE_SERVER_RESOLVE_FIRST, true);
+    }
+
+    private Representation newRepresentation(ImageInfo imageInfo) {
+        final MediaType mediaType = getNegotiatedMediaType();
+        return new JSONRepresentation(imageInfo, mediaType, () -> {
+            if (tempFileFuture != null) {
+                Path tempFile = tempFileFuture.get();
+                if (tempFile != null) {
+                    Files.deleteIfExists(tempFile);
+                }
+            }
+            return null;
+        });
     }
 
 }

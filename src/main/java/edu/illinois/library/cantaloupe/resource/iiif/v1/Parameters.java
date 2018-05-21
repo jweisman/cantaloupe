@@ -2,22 +2,20 @@ package edu.illinois.library.cantaloupe.resource.iiif.v1;
 
 import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.image.Identifier;
+import edu.illinois.library.cantaloupe.operation.Encode;
 import edu.illinois.library.cantaloupe.operation.OperationList;
-import edu.illinois.library.cantaloupe.resource.ParameterList;
+import edu.illinois.library.cantaloupe.processor.UnsupportedOutputFormatException;
+import edu.illinois.library.cantaloupe.resource.IllegalClientArgumentException;
 import org.apache.commons.lang3.StringUtils;
 import org.restlet.data.Reference;
 
-import java.awt.Dimension;
-import java.net.URL;
-import java.util.Map;
-
 /**
- * Encapsulates the parameters of an IIIF request.
+ * Encapsulates the parameters of a request URI.
  *
  * @see <a href="http://iiif.io/api/image/1.1/#parameters">IIIF Image API
  * 1.1</a>
  */
-class Parameters implements ParameterList, Comparable<Parameters> {
+class Parameters {
 
     private Format outputFormat;
     private Identifier identifier;
@@ -28,27 +26,32 @@ class Parameters implements ParameterList, Comparable<Parameters> {
 
     /**
      * @param paramsStr URI path fragment beginning from the identifier onward
-     * @throws IllegalArgumentException if the given string does not have the
-     * correct format
+     * @throws IllegalClientArgumentException if the argument does not have the
+     *         correct format, or any of its components are invalid.
      */
-    public static Parameters fromUri(String paramsStr)
-            throws IllegalArgumentException {
+    public static Parameters fromUri(String paramsStr) {
         Parameters params = new Parameters();
         String[] parts = StringUtils.split(paramsStr, "/");
-        if (parts.length == 5) {
-            params.setIdentifier(new Identifier(Reference.decode(parts[0])));
-            params.setRegion(Region.fromUri(parts[1]));
-            params.setSize(Size.fromUri(parts[2]));
-            params.setRotation(Rotation.fromUri(parts[3]));
-            String[] subparts = StringUtils.split(parts[4], ".");
-            if (subparts.length == 2) {
-                params.setQuality(Quality.valueOf(subparts[0].toUpperCase()));
-                params.setOutputFormat(Format.valueOf(subparts[1].toUpperCase()));
+        try {
+            if (parts.length == 5) {
+                params.setIdentifier(new Identifier(Reference.decode(parts[0])));
+                params.setRegion(Region.fromUri(parts[1]));
+                params.setSize(Size.fromUri(parts[2]));
+                params.setRotation(Rotation.fromUri(parts[3]));
+                String[] subparts = StringUtils.split(parts[4], ".");
+                if (subparts.length == 2) {
+                    params.setQuality(Quality.valueOf(subparts[0].toUpperCase()));
+                    params.setOutputFormat(Format.valueOf(subparts[1].toUpperCase()));
+                } else {
+                    throw new IllegalClientArgumentException("Invalid parameters format");
+                }
             } else {
-                throw new IllegalArgumentException("Invalid parameters format");
+                throw new IllegalClientArgumentException("Invalid parameters format");
             }
-        } else {
-            throw new IllegalArgumentException("Invalid parameters format");
+        } catch (IllegalClientArgumentException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new IllegalClientArgumentException(e.getMessage(), e);
         }
         return params;
     }
@@ -59,27 +62,45 @@ class Parameters implements ParameterList, Comparable<Parameters> {
     public Parameters() {}
 
     /**
-     * @param identifier Encoded URI value
+     * @param identifier Decoded identifier.
      * @param region From URI
      * @param size From URI
      * @param rotation From URI
      * @param quality From URI
      * @param format From URI
+     * @throws UnsupportedOutputFormatException if the {@literal format}
+     *         argument is invalid.
      */
-    public Parameters(String identifier, String region, String size,
-                      String rotation, String quality, String format) {
-        this.setIdentifier(new Identifier(Reference.decode(identifier)));
-        this.setRegion(Region.fromUri(region));
-        this.setSize(Size.fromUri(size));
-        this.setRotation(Rotation.fromUri(rotation));
-        this.setQuality(Quality.valueOf(quality.toUpperCase()));
-        this.setOutputFormat(Format.valueOf(format.toUpperCase()));
+    public Parameters(Identifier identifier,
+                      String region,
+                      String size,
+                      String rotation,
+                      String quality,
+                      String format) {
+        setIdentifier(identifier);
+        setRegion(Region.fromUri(region));
+        setSize(Size.fromUri(size));
+        setRotation(Rotation.fromUri(rotation));
+        try {
+            setQuality(Quality.valueOf(quality.toUpperCase()));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalClientArgumentException(e.getMessage(), e);
+        }
+        try {
+            setOutputFormat(Format.valueOf(format.toUpperCase()));
+        } catch (IllegalArgumentException e) {
+            throw new UnsupportedOutputFormatException(format);
+        }
     }
 
     @Override
-    public int compareTo(Parameters params) {
-        int last = this.toString().compareTo(params.toString());
-        return (last == 0) ? this.toString().compareTo(params.toString()) : last;
+    public boolean equals(Object obj) {
+        if (obj == this) {
+            return true;
+        } else if (obj instanceof Parameters) {
+            return obj.toString().equals(toString());
+        }
+        return super.equals(obj);
     }
 
     public Identifier getIdentifier() {
@@ -104,6 +125,11 @@ class Parameters implements ParameterList, Comparable<Parameters> {
 
     public Size getSize() {
         return size;
+    }
+
+    @Override
+    public int hashCode() {
+        return toString().hashCode();
     }
 
     public void setIdentifier(Identifier identifier) {
@@ -131,13 +157,13 @@ class Parameters implements ParameterList, Comparable<Parameters> {
     }
 
     /**
-     * {@inheritDoc}
+     * @return Analog of the request parameters for processing, excluding any
+     *         additional operations that may need to be performed, such as
+     *         overlays, etc.
      */
-    @Override
-    public OperationList toOperationList() {
-        OperationList ops = new OperationList();
-        ops.setIdentifier(getIdentifier());
-        ops.setOutputFormat(getOutputFormat());
+    OperationList toOperationList() {
+        OperationList ops = new OperationList(getIdentifier());
+
         if (!getRegion().isFull()) {
             ops.add(getRegion().toCrop());
         }
@@ -148,11 +174,13 @@ class Parameters implements ParameterList, Comparable<Parameters> {
             ops.add(getRotation().toRotate());
         }
         ops.add(getQuality().toColorTransform());
+        ops.add(new Encode(getOutputFormat()));
+
         return ops;
     }
 
     /**
-     * @return IIIF URI parameters with no leading slash.
+     * @return URI parameters with no leading slash.
      */
     public String toString() {
         return String.format("%s/%s/%s/%s/%s.%s", getIdentifier(), getRegion(),

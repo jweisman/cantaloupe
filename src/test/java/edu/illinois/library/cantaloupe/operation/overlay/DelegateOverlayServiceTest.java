@@ -1,24 +1,23 @@
 package edu.illinois.library.cantaloupe.operation.overlay;
 
 import edu.illinois.library.cantaloupe.config.Configuration;
-import edu.illinois.library.cantaloupe.config.ConfigurationFactory;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.image.Identifier;
+import edu.illinois.library.cantaloupe.operation.Color;
+import edu.illinois.library.cantaloupe.operation.Encode;
 import edu.illinois.library.cantaloupe.operation.OperationList;
-import edu.illinois.library.cantaloupe.script.ScriptEngineFactory;
+import edu.illinois.library.cantaloupe.resource.RequestContext;
+import edu.illinois.library.cantaloupe.script.DelegateProxy;
+import edu.illinois.library.cantaloupe.script.DelegateProxyService;
 import edu.illinois.library.cantaloupe.test.BaseTest;
 import edu.illinois.library.cantaloupe.test.TestUtil;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.font.TextAttribute;
-import java.io.File;
-import java.net.URL;
-import java.util.HashMap;
-import java.util.Map;
+import java.net.URI;
 
 import static org.junit.Assert.*;
 
@@ -30,74 +29,69 @@ public class DelegateOverlayServiceTest extends BaseTest {
     public void setUp() throws Exception {
         super.setUp();
 
-        Configuration config = ConfigurationFactory.getInstance();
+        Configuration config = Configuration.getInstance();
         config.setProperty(Key.DELEGATE_SCRIPT_ENABLED, true);
         config.setProperty(Key.DELEGATE_SCRIPT_PATHNAME,
-                TestUtil.getFixture("delegates.rb").getAbsolutePath());
+                TestUtil.getFixture("delegates.rb").toString());
 
         instance = new DelegateOverlayService();
     }
 
     @Test
     public void testGetOverlayReturningImageOverlay() throws Exception {
-        final OperationList opList = new OperationList();
-        opList.setIdentifier(new Identifier("image"));
-        opList.setOutputFormat(Format.JPG);
-        final Dimension fullSize = new Dimension(100, 100);
-        final URL requestUrl = new URL("http://example.org/");
-        final Map<String,String> requestHeaders = new HashMap<>();
-        final String clientIp = "";
-        final Map<String,String> cookies = new HashMap<>();
+        final Identifier identifier = new Identifier("image");
+        final Dimension fullSize = new Dimension(500, 500);
+        final OperationList opList = new OperationList(
+                identifier, new Encode(Format.JPG));
+        final RequestContext context = new RequestContext();
+        context.setIdentifier(identifier);
+        context.setOperationList(opList, fullSize);
 
-        final ImageOverlay overlay = (ImageOverlay) instance.getOverlay(
-                opList, fullSize, requestUrl, requestHeaders, clientIp,
-                cookies);
-        assertEquals(new File("/dev/cats"), overlay.getFile());
+        DelegateProxyService service = DelegateProxyService.getInstance();
+        DelegateProxy proxy = service.newDelegateProxy(context);
+
+        final ImageOverlay overlay = (ImageOverlay) instance.getOverlay(proxy);
+        assertEquals(new URI("file:///dev/cats"), overlay.getURI());
         assertEquals((long) 5, overlay.getInset());
         assertEquals(Position.BOTTOM_LEFT, overlay.getPosition());
     }
 
     @Test
     public void testGetOverlayReturningStringOverlay() throws Exception {
-        final OperationList opList = new OperationList();
-        opList.setIdentifier(new Identifier("string"));
-        opList.setOutputFormat(Format.JPG);
-        final Dimension fullSize = new Dimension(100, 100);
-        final URL requestUrl = new URL("http://example.org/");
-        final Map<String,String> requestHeaders = new HashMap<>();
-        final String clientIp = "";
-        final Map<String,String> cookies = new HashMap<>();
+        final Identifier identifier = new Identifier("string");
+        final Dimension fullSize = new Dimension(500, 500);
+        final OperationList opList = new OperationList(
+                identifier, new Encode(Format.JPG));
+        final RequestContext context = new RequestContext();
+        context.setIdentifier(identifier);
+        context.setOperationList(opList, fullSize);
 
-        final StringOverlay overlay = (StringOverlay) instance.getOverlay(
-                opList, fullSize, requestUrl, requestHeaders, clientIp,
-                cookies);
+        DelegateProxyService service = DelegateProxyService.getInstance();
+        DelegateProxy proxy = service.newDelegateProxy(context);
+
+        final StringOverlay overlay =
+                (StringOverlay) instance.getOverlay(proxy);
         assertEquals("dogs\ndogs", overlay.getString());
-        assertEquals("Helvetica", overlay.getFont().getFamily());
+        assertEquals("SansSerif", overlay.getFont().getName());
         assertEquals(20, overlay.getFont().getSize());
         assertEquals(11, overlay.getMinSize());
         assertEquals(1.5f, overlay.getFont().getAttributes().get(TextAttribute.WEIGHT));
         assertEquals(0.1f, overlay.getFont().getAttributes().get(TextAttribute.TRACKING));
         assertEquals((long) 5, overlay.getInset());
         assertEquals(Position.BOTTOM_LEFT, overlay.getPosition());
-        assertEquals(Color.red, overlay.getColor());
-        assertEquals(Color.blue, overlay.getStrokeColor());
+        assertEquals(Color.RED, overlay.getColor());
+        assertEquals(Color.BLUE, overlay.getStrokeColor());
         assertEquals(new Color(12, 23, 34, 45), overlay.getBackgroundColor());
         assertEquals(3, overlay.getStrokeWidth(), 0.00001f);
     }
 
     @Test
-    public void testGetOverlayReturningFalse() throws Exception {
-        final OperationList opList = new OperationList();
-        opList.setIdentifier(new Identifier("bogus"));
-        opList.setOutputFormat(Format.JPG);
-        final Dimension fullSize = new Dimension(100, 100);
-        final URL requestUrl = new URL("http://example.org/");
-        final Map<String,String> requestHeaders = new HashMap<>();
-        final String clientIp = "";
-        final Map<String,String> cookies = new HashMap<>();
+    public void testGetOverlayReturningNull() throws Exception {
+        final RequestContext context = new RequestContext();
+        DelegateProxyService service = DelegateProxyService.getInstance();
+        DelegateProxy proxy = service.newDelegateProxy(context);
 
-        Overlay overlay = instance.getOverlay(
-                opList, fullSize, requestUrl, requestHeaders, clientIp, cookies);
+        Overlay overlay = instance.getOverlay(proxy);
         assertNull(overlay);
     }
 

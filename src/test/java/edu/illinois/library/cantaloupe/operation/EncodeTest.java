@@ -3,7 +3,6 @@ package edu.illinois.library.cantaloupe.operation;
 import edu.illinois.library.cantaloupe.image.Compression;
 import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.test.BaseTest;
-import edu.illinois.library.cantaloupe.test.TestUtil;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -21,76 +20,94 @@ public class EncodeTest extends BaseTest {
         instance = new Encode(Format.JPG);
     }
 
-    /* getResultingSize(Dimension) */
-
     @Test
-    public void testGetResultingSize() {
+    public void getResultingSize() {
         Dimension size = new Dimension(500, 500);
         assertEquals(size, instance.getResultingSize(size));
     }
 
-    /* hasEffect() */
-
     @Test
-    public void testHasEffect() {
+    public void hasEffect() {
         assertTrue(instance.hasEffect());
     }
 
-    /* hasEffect(Dimension, OperationList) */
-
     @Test
-    public void testHasEffectWithArguments() {
+    public void hasEffectWithArguments() {
         Dimension size = new Dimension(500, 500);
-        OperationList opList = TestUtil.newOperationList();
+        OperationList opList = new OperationList();
         assertTrue(instance.hasEffect(size, opList));
     }
 
-    /* setQuality() */
+    @Test(expected = IllegalStateException.class)
+    public void setBackgroundColorWhenFrozenThrowsException() {
+        instance.freeze();
+        instance.setBackgroundColor(Color.RED);
+    }
 
-    @Test
-    public void testSetQualityWithZeroArgumentThrowsException() {
-        try {
-            instance.setQuality(0);
-            fail("Expected exception");
-        } catch (IllegalArgumentException e) {
-            // pass
-        }
+    @Test(expected = IllegalStateException.class)
+    public void setCompressionWhenFrozenThrowsException() {
+        instance.freeze();
+        instance.setCompression(Compression.LZW);
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void setFormatWhenFrozenThrowsException() {
+        instance.freeze();
+        instance.setFormat(Format.PNG);
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void setInterlacingWhenFrozenThrowsException() {
+        instance.freeze();
+        instance.setInterlacing(false);
     }
 
     @Test
-    public void testSetQualityWithNegativeArgumentThrowsException() {
-        try {
-            instance.setQuality(-1);
-            fail("Expected exception");
-        } catch (IllegalArgumentException e) {
-            // pass
-        }
+    public void setMaxComponentSizeWithZeroArgument() {
+        instance.setMaxComponentSize(0);
+        assertEquals(Integer.MAX_VALUE, instance.getMaxComponentSize());
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void setMaxComponentSizeWhenFrozenThrowsException() {
+        instance.freeze();
+        instance.setMaxComponentSize(8);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void setQualityWithZeroArgumentThrowsException() {
+        instance.setQuality(0);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void setQualityWithNegativeArgumentThrowsException() {
+        instance.setQuality(-1);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void setQualityWithArgumentAboveMaxThrowsException() {
+        instance.setQuality(Encode.MAX_QUALITY + 1);
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void setQualityWhenFrozenThrowsException() {
+        instance.freeze();
+        instance.setQuality(50);
     }
 
     @Test
-    public void testSetQualityWithArgumentAboveMaxThrowsException() {
-        try {
-            instance.setQuality(Encode.MAX_QUALITY + 1);
-            fail("Expected exception");
-        } catch (IllegalArgumentException e) {
-            // pass
-        }
-    }
-
-    @Test
-    public void testSetQualityWithValidArgument() {
+    public void setQualityWithValidArgument() {
         instance.setQuality(50);
         assertEquals(50, instance.getQuality());
     }
 
-    /* toMap() */
-
     @Test
-    public void testToMap() {
+    public void toMap() {
         instance.setCompression(Compression.JPEG);
         instance.setInterlacing(true);
         instance.setQuality(50);
         instance.setBackgroundColor(Color.BLUE);
+        instance.setMaxComponentSize(10);
 
         final Map<String,Object> map = instance.toMap(new Dimension(500, 500));
         assertEquals("Encode", map.get("class"));
@@ -99,9 +116,15 @@ public class EncodeTest extends BaseTest {
         assertEquals(Format.JPG.getPreferredMediaType(), map.get("format"));
         assertTrue((boolean) map.get("interlace"));
         assertEquals(50, map.get("quality"));
+        assertEquals(10, map.get("max_sample_size"));
     }
 
-    /* toString() */
+    @Test(expected = UnsupportedOperationException.class)
+    public void toMapReturnsUnmodifiableMap() {
+        Dimension fullSize = new Dimension(100, 100);
+        Map<String, Object> map = instance.toMap(fullSize);
+        map.put("test", "test");
+    }
 
     @Test
     public void testToString() {
@@ -109,7 +132,8 @@ public class EncodeTest extends BaseTest {
         instance.setInterlacing(true);
         instance.setQuality(50);
         instance.setBackgroundColor(Color.BLUE);
-        assertEquals("jpg_JPEG_50_interlace_#0000FF", instance.toString());
+        instance.setMaxComponentSize(10);
+        assertEquals("jpg_JPEG_50_interlace_#0000FF_10", instance.toString());
     }
 
 }

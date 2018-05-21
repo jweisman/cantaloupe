@@ -3,13 +3,6 @@ layout: manual_3.4
 title: Resolvers
 ---
 
-<ol class="breadcrumb">
-  <li><a href="{{ site.baseurl }}/">Home</a></li>
-  <li><a href="{{ site.baseurl }}/manual/">User Manual</a></li>
-  <li><a href="{{ site.baseurl }}/manual/3.4/">3.4</a></li>
-  <li class="active">Resolvers</li>
-</ol>
-
 <h1>Resolvers</h1>
 
 <ul>
@@ -31,13 +24,13 @@ title: Resolvers
   </li>
 </ul>
 
-<p>Resolvers locate and provide access to source images. A resolver translates an identifier in a request URL to an image locator, such as a pathname, in the particular type of underlying storage it is written to interface with. It can then check whether the underlying object exists and is accessible, and if so, provide access to it to other image server components. The rest of the image server does not need to know where an image resides, be it on the filesystem, in a database, on a remote web server, or in cloud storage&mdash;it can simply ask the current resolver, whatever it may be, to provide a generic interface from which an image can be read.</p>
+<p>Resolvers provide access to source images. A resolver translates an identifier in a request URL to a source image locator, such as a pathname, in the particular type of underlying storage it is written to interface with. It can then check whether the underlying object exists and is accessible, and if so, provide access to it to other image server components. The rest of the image server does not need to know where an image resides, be it on the filesystem, on a remote web server, or wherever&mdash;it can just ask the resolver, whatever it may be, to provide a generic interface from which an image can be read.</p>
 
-<p>The interface in question may be a stream or a file. All resolvers can provide stream access, but only <a href="#FilesystemResolver">FilesystemResolver</a> can provide file access. This distinction is important because <a href="processors.html#Resolver%20Compatibility">not all processors can read from streams</a>.</p>
+<p>The interface in question may be a stream or a file. All resolvers can provide stream access, but only <a href="#FilesystemResolver">FilesystemResolver</a> can provide file access. This distinction is important because <a href="processors.html#Resolver%20Compatibility">not all processors can read from streams</a>. See <a href="images.html#Considerations">Image Considerations</a> for background on why this is an issue.</p>
 
 <h2 id="Selection">Selection</h2>
 
-<p>In a typical configuration, <a href="#Static%20Resolver">one resolver will handle all requests</a>. It is also possible to configure the image server to <a href="#Dynamic%20Resolvers">select a resolver dynamically</a> upon each request depending on the image identifier.</p>
+<p>In a typical configuration, <a href="#Static%20Resolver">one resolver will handle all requests</a>. It is also possible to <a href="#Dynamic%20Resolvers">select a resolver dynamically</a> depending on the image identifier.</p>
 
 <h3 id="Static Resolver">Static Resolver</h2>
 
@@ -47,7 +40,7 @@ title: Resolvers
 
 <p>When a static resolver is not flexible enough, it is also possible to serve images from different sources simultaneously. For example, you may have some images stored on a filesystem, and others stored on Amazon S3. <em>If you can differentiate their sources based on their identifier in code</em>&mdash;either by analyzing the identifier string, or performing some kind of service request&mdash;you can use the <a href="delegate-script.html">delegate script</a> mechanism to write a simple Ruby method to tell the image server which resolver to use for a given request.</p>
 
-<p>To enable dynamic resolver selection, set the <code>resolver.delegate</code> configuration key to <code>true</code>. Then, implement the <code>get_resolver(identifier)</code> method in the delegate script, which takes in an identifier and returns a resolver name (like FilesystemResolver, HttpResolver, etc.) For example:</p>
+<p>To enable dynamic resolver selection, set the <code>resolver.delegate</code> configuration key to <code>true</code>. Then, implement the <code>get_resolver(identifier)</code> method in the delegate script, which takes an identifier argument and returns a resolver name. For example:</p>
 
 {% highlight ruby %}
 module Cantaloupe
@@ -98,7 +91,7 @@ end
 
 <h3 id="FilesystemResolver">FilesystemResolver</h3>
 
-<p>FilesystemResolver maps a URL identifier to a filesystem path, for retrieving images on a local or attached filesystem. In addition to being the most compatible resolver, <strong>this is also the most efficient resolver</strong> and may or may not be the only option for serving very large source images.</p>
+<p>FilesystemResolver maps a URL identifier to a filesystem path, for retrieving images on a local or attached filesystem. In addition to being the most compatible resolver, <strong>this is also the most efficient resolver</strong> and may be the only option for serving very large source images.</p>
 
 <p>For images with extensions that are missing or unrecognized, this resolver will check the "magic number" to determine type, which will add some overhead. It is therefore slightly more efficient to serve images with extensions.</p>
 
@@ -117,9 +110,13 @@ FilesystemResolver.BasicLookupStrategy.path_suffix =
 <p>An identifier of <code>image.jpg</code> in the URL will resolve to
 <span class="filename">/usr/local/images/image.jpg</span>.</p>
 
-<p>To prevent arbitrary directory traversal, BasicLookupStrategy will strip out <code>..{path separator}</code> and <code>{path separator}..</code> from identifiers before resolving the path.</p>
+<p>It's also possible to include a partial path in the identifier using URL-encoded slashes (<code>%2F</code>) as path separators. <code>subdirectory%2Fimage.jpg</code> in the URL would then resolve to <span class="filename">/usr/local/images/subdirectory/image.jpg</span>.</p>
 
-<div class="alert alert-danger">Note: it is dangerous to <strong>not</strong> use <code>path_prefix</code>. The shallower the path, the more of the filesystem that will be exposed.</div>
+<div class="alert alert-info">If you are operating behind a reverse proxy that is not capable of passing encoded URL characters through without decoding them, see the <code>slash_substitude</code> configuration key.</div>
+
+<p>To prevent arbitrary directory traversal, BasicLookupStrategy will strip out <code>../</code>, <code>/..</code>, <code>..\</code>, and <code>\..</code> from identifiers before resolving the path.</p>
+
+<div class="alert alert-warning">It may be dangerous to <strong>not</strong> use <code>path_prefix</code>. The shallower the path, the more of the filesystem that will be exposed.</div>
 
 <h4 id="FilesystemResolverScriptLookupStrategy">ScriptLookupStrategy</h4>
 
@@ -148,7 +145,7 @@ module Cantaloupe
     # get_pathname() is called, which would be slow and expensive.
     @@conn = DriverManager.get_connection(JDBC_URL, JDBC_USER, JDBC_PASSWORD)
 
-    def self.get_pathname(identifier)
+    def self.get_pathname(identifier, context)
       begin
         # Note the use of prepared statements to prevent SQL injection.
         sql = 'SELECT pathname FROM images WHERE identifier = ? LIMIT 1'
@@ -178,7 +175,7 @@ require 'cgi'
 
 module Cantaloupe
   module FilesystemResolver
-    def self.get_pathname(identifier)
+    def self.get_pathname(identifier, context)
       uri = 'http://example.org/webservice/' + CGI.escape(identifier)
       uri = URI.parse(uri)
 
@@ -193,39 +190,13 @@ module Cantaloupe
 end
 {% endhighlight %}
 
-<h5>Example 3: Query Solr to find the pathname corresponding to a given identifier</h5>
-
-<p>In this variation on the previous example, our web service is Solr, and instead of parsing a text string out of the response body, we treat the body as Ruby code.</p>
-
-{% highlight ruby %}
-require 'net/http'
-require 'cgi'
-
-module Cantaloupe
-  module FilesystemResolver
-    def self.get_pathname(identifier)
-      uri = 'http://localhost:8983/solr/collection1/select?q=' +
-          CGI.escape('id:"' + identifier + '"') +
-          '&amp;fl=pathname_si&amp;wt=ruby'
-      uri = URI.parse(uri)
-
-      http = Net::HTTP.new(uri.host, uri.port)
-      request = Net::HTTP::Get.new(uri.request_uri)
-      response = http.request(request)
-      return nil if response.code.to_i >= 400
-
-      results = eval(response.body)['response']['docs']
-      results.any? ? results.first['pathname_si'] : nil
-    end
-  end
-end
-{% endhighlight %}
-
 <hr>
 
 <h3 id="HttpResolver">HttpResolver</h3>
 
 <p>HttpResolver maps a URL identifier to an HTTP or HTTPS resource, for retrieving images from a web server.</p>
+
+<p>Prior to version 3.4, HttpResolver used the HTTP client bundled with <a href="https://restlet.com/open-source/">Restlet Framework</a>. In version 3.4, the implementation changed to use the <a href="http://www.eclipse.org/jetty/documentation/current/http-client.html">Jetty HTTP client</a>, which is more robust.</p>
 
 <p>It is preferable to use this resolver with source images with recognizable file extensions. For images with an extension that is missing or unrecognizable, it will issue an HTTP HEAD request to the server to check the <code>Content-Type</code> header. If the type cannot be inferred from that, an error response will be returned.</p>
 
@@ -242,7 +213,11 @@ HttpResolver.url_suffix =
 {% endhighlight %}
 
 <p>An identifier of <code>image.jpg</code> in the URL will resolve to
-<span class="filename">http://example.org/images/image.jpg</span>.
+<span class="filename">http://example.org/images/image.jpg</span>.</p>
+
+<p>It's also possible to include a partial path in the identifier using URL-encoded slashes (<code>%2F</code>) as path separators. <code>subdirectory%2Fimage.jpg</code> in the URL would then resolve to <span class="filename">http://example.org/images/subdirectory/image.jpg</span>.</p>
+
+<div class="alert alert-info">If you are operating behind a reverse proxy that is not capable of passing encoded URL characters through without decoding them, see the <code>slash_substitude</code> configuration key.</div>
 
 <h4 id="HttpResolverScriptLookupStrategy">ScriptLookupStrategy</h4>
 
@@ -254,7 +229,7 @@ HttpResolver.url_suffix =
 
 <h3 id="JdbcResolver">JdbcResolver</h3>
 
-<p>JdbcResolver maps a URL identifier to an RDBMS BLOB field, for retrieving images from a relational database. It does not require a custom schema and can adapt to any schema. The downside of that is that some <a href="delegate-script.html">delegate script</a> methods must be implemented in order to obtain the information needed to run the SQL queries.</p>
+<p>JdbcResolver maps a URL identifier to a BLOB field, for retrieving images from a relational database. It does not require a custom schema and can adapt to any schema. The downside of that is that some <a href="delegate-script.html">delegate script</a> methods must be implemented in order to obtain the information needed to run the SQL queries.</p>
 
 <p>Cantaloupe does not include any JDBC drivers, so a driver JAR for the desired database must be obtained separately and saved somewhere on the classpath.</p>
 
@@ -329,26 +304,32 @@ end
 
 <h3 id="AmazonS3Resolver">AmazonS3Resolver</h3>
 
-<p>AmazonS3Resolver maps a URL identifier to an <a href="https://aws.amazon.com/s3/">Amazon Simple Storage Service (S3)</a> object, for retrieving images from Amazon S3. It can be configured with the following options:</p>
+<p>AmazonS3Resolver maps a URL identifier to an <a href="https://aws.amazon.com/s3/">Amazon Simple Storage Service (S3)</a> object, for retrieving images from Amazon S3.</p>
+
+<h4>Configuration</h4>
+
+<p>AmazonS3Resolver is configured (excepting credentials) using the following configuation keys:</p>
 
 <dl>
-  <dt><code>AmazonS3Resolver.access_key_id</code></dt>
-  <dd>An access key associated with your AWS account. (See <a href="http://aws.amazon.com/security-credentials">AWS Security Credentials</a>.)</dd>
-  <dt><code>AmazonS3Resolver.secret_key</code></dt>
-  <dd>A secret key associated with your AWS account. (See <a href="http://aws.amazon.com/security-credentials">AWS Security Credentials</a>.)</dd>
   <dt><code>AmazonS3Resolver.bucket.name</code></dt>
   <dd>Name of the bucket containing the images to be served.</dd>
   <dt><code>AmazonS3Resolver.bucket.region</code></dt>
-  <dd>Name of a region to send requests to, such as <code>us-east-1</code>. Can be commented out or left blank to use a default region. (See <a href="http://docs.aws.amazon.com/general/latest/gr/rande.html#s3_region">S3 Regions</a>.)</dd>
+  <dd>Name of a region to send requests to, such as <code>us-east-1</code>.</dd>
   <dt><code>AmazonS3Resolver.lookup_strategy</code></dt>
-  <dd>The strategy to use to look up images based on their URL identifier. See below.</dd>
+  <dd>The strategy to use to look up images based on their URL identifier. See <a href="#AmazonS3ResolverLookupStrategies">Lookup Strategies</a>.</dd>
 </dl>
 
-<h4 id="AmazonS3ResolverBasicLookupStrategy">BasicLookupStrategy</h4>
+<h4 id="AmazonS3ResolverCredentialsSources">Credentials Sources</h4>
+
+<p>AmazonS3Resolver can obtain its credentials from several different sources. It will first consult the <code>AmazonS3Resolver.access_key_id</code> and  <code>AmazonS3Resolver.secret_key</code> keys in the application configuration. If those are not set, it will fall back to the strategy employed by the AWS SDK's <code>DefaultAWSCredentialsProviderChain</code>; see its <a href="https://docs.aws.amazon.com/AWSJavaSDK/latest/javadoc/index.html?com/amazonaws/auth/DefaultAWSCredentialsProviderChain.html">class documentation</a> for details.</p>
+
+<h4 id="AmazonS3ResolverLookupStrategies">Lookup Strategies</h4>
+
+<h5 id="AmazonS3ResolverBasicLookupStrategy">BasicLookupStrategy</h5>
 
 <p>BasicLookupStrategy locates images by passing the URL identifier as-is to S3, with no additional configuration necessary or possible.</p>
 
-<h4 id="AmazonS3ResolverScriptLookupStrategy">ScriptLookupStrategy</h4>
+<h5 id="AmazonS3ResolverScriptLookupStrategy">ScriptLookupStrategy</h5>
 
 <p>When your URL identifiers don't match your Amazon S3 object keys, ScriptLookupStrategy is available to tell AmazonS3Resolver to capture the object key returned by a method in your <a href="delegate-script.html">delegate script</a>.</p>
 
@@ -371,11 +352,13 @@ end
   <dd>The strategy to use to look up images based on their URL identifier. See below.</dd>
 </dl>
 
-<h4 id="AzureStorageResolverBasicLookupStrategy">BasicLookupStrategy</h4>
+<h4>Lookup Strategies</h4>
+
+<h5 id="AzureStorageResolverBasicLookupStrategy">BasicLookupStrategy</h5>
 
 <p>BasicLookupStrategy locates images by passing the URL identifier as-is to Azure Storage, with no additional configuration necessary or possible.</p>
 
-<h4 id="AzureStorageResolverScriptLookupStrategy">ScriptLookupStrategy</h4>
+<h5 id="AzureStorageResolverScriptLookupStrategy">ScriptLookupStrategy</h5>
 
 <p>When your URL identifiers don't match your Azure Storage blob keys, ScriptLookupStrategy is available to tell AzureStorageResolver to capture the blob key returned by a method in your <a href="delegate-script.html">delegate script</a>.</p>
 

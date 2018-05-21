@@ -1,49 +1,41 @@
 package edu.illinois.library.cantaloupe.resource.iiif.v1;
 
-import edu.illinois.library.cantaloupe.config.ConfigurationFactory;
+import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.image.Info;
 import edu.illinois.library.cantaloupe.processor.Processor;
-import edu.illinois.library.cantaloupe.processor.ProcessorException;
 import edu.illinois.library.cantaloupe.resource.iiif.ImageInfoUtil;
 
 import java.awt.Dimension;
 
-abstract class ImageInfoFactory {
+final class ImageInfoFactory {
 
-    /** Will be used to calculate a maximum scale factor. */
     private static final int MIN_SIZE = 64;
 
-    static ImageInfo newImageInfo(final String imageUri,
-                                  final Processor processor,
-                                  final Info cacheInfo)
-            throws ProcessorException {
-        // We want to use the orientation-aware full size, which takes the
-        // embedded orientation into account.
-        final Dimension virtualSize = cacheInfo.getOrientationSize();
-
+    ImageInfo newImageInfo(final String imageUri,
+                           final Processor processor,
+                           final Info.Image infoImage,
+                           final int numResolutions) {
         final ComplianceLevel complianceLevel = ComplianceLevel.getLevel(
                 processor.getSupportedFeatures(),
-                processor.getSupportedIiif1_1Qualities(),
+                processor.getSupportedIIIF1Qualities(),
                 processor.getAvailableOutputFormats());
 
-        final int minTileSize = ConfigurationFactory.getInstance().
+        final int minTileSize = Configuration.getInstance().
                 getInt(Key.IIIF_MIN_TILE_SIZE, 1024);
 
         // Find a tile width and height. If the image is not tiled,
         // calculate a tile size close to MIN_TILE_SIZE_CONFIG_KEY pixels.
         // Otherwise, use the smallest multiple of the tile size above
         // MIN_TILE_SIZE_CONFIG_KEY of image resolution 0.
-        final Info.Image firstImage =
-                cacheInfo.getImages().get(0);
-        Dimension virtualTileSize = firstImage.getOrientationTileSize();
+        final Dimension virtualSize = infoImage.getOrientationSize();
+        Dimension virtualTileSize = infoImage.getOrientationTileSize();
 
-        if (cacheInfo.getImages().size() > 0) {
+        if (numResolutions > 0) {
             if (!virtualTileSize.equals(virtualSize)) {
-                virtualTileSize = ImageInfoUtil.smallestTileSize(virtualSize,
-                        firstImage.getOrientationTileSize(),
-                        minTileSize);
+                virtualTileSize = ImageInfoUtil.smallestTileSize(
+                        virtualSize, virtualTileSize, minTileSize);
             }
         }
 
@@ -70,7 +62,7 @@ abstract class ImageInfoFactory {
         }
 
         // qualities
-        for (Quality quality : processor.getSupportedIiif1_1Qualities()) {
+        for (Quality quality : processor.getSupportedIIIF1Qualities()) {
             imageInfo.qualities.add(quality.toString().toLowerCase());
         }
 

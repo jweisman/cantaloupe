@@ -1,12 +1,12 @@
 package edu.illinois.library.cantaloupe.processor;
 
 import edu.illinois.library.cantaloupe.config.Configuration;
-import edu.illinois.library.cantaloupe.config.ConfigurationFactory;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Format;
+import edu.illinois.library.cantaloupe.image.Identifier;
 import edu.illinois.library.cantaloupe.image.Info;
+import edu.illinois.library.cantaloupe.operation.Encode;
 import edu.illinois.library.cantaloupe.operation.OperationList;
-import edu.illinois.library.cantaloupe.operation.ValidationException;
 import edu.illinois.library.cantaloupe.resource.iiif.ProcessorFeature;
 import edu.illinois.library.cantaloupe.test.TestUtil;
 import org.apache.commons.io.output.NullOutputStream;
@@ -16,24 +16,36 @@ import org.junit.Test;
 import java.awt.Dimension;
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
 import static org.junit.Assert.*;
 
-public class PdfBoxProcessorTest extends ProcessorTest {
+public class PdfBoxProcessorTest extends AbstractProcessorTest {
 
     private PdfBoxProcessor instance;
 
     @Before
     public void setUp() throws Exception {
         super.setUp();
-        Configuration config = ConfigurationFactory.getInstance();
-        config.setProperty(Key.PDFBOXPROCESSOR_DPI, 72);
+        Configuration config = Configuration.getInstance();
+        config.setProperty(Key.PROCESSOR_DPI, 72);
         instance = newInstance();
     }
 
+    @Override
+    protected Format getSupported16BitSourceFormat() {
+        return null;
+    }
+
+    @Override
+    protected Path getSupported16BitImage() {
+        return null;
+    }
+
+    @Override
     protected PdfBoxProcessor newInstance() {
         PdfBoxProcessor proc = new PdfBoxProcessor();
         try {
@@ -46,20 +58,22 @@ public class PdfBoxProcessorTest extends ProcessorTest {
 
     @Test
     public void testGetSupportedFeatures() throws Exception {
-        Set<ProcessorFeature> expectedFeatures = new HashSet<>();
-        expectedFeatures.add(ProcessorFeature.MIRRORING);
-        expectedFeatures.add(ProcessorFeature.REGION_BY_PERCENT);
-        expectedFeatures.add(ProcessorFeature.REGION_BY_PIXELS);
-        expectedFeatures.add(ProcessorFeature.REGION_SQUARE);
-        expectedFeatures.add(ProcessorFeature.ROTATION_ARBITRARY);
-        expectedFeatures.add(ProcessorFeature.ROTATION_BY_90S);
-        expectedFeatures.add(ProcessorFeature.SIZE_ABOVE_FULL);
-        expectedFeatures.add(ProcessorFeature.SIZE_BY_DISTORTED_WIDTH_HEIGHT);
-        expectedFeatures.add(ProcessorFeature.SIZE_BY_FORCED_WIDTH_HEIGHT);
-        expectedFeatures.add(ProcessorFeature.SIZE_BY_HEIGHT);
-        expectedFeatures.add(ProcessorFeature.SIZE_BY_PERCENT);
-        expectedFeatures.add(ProcessorFeature.SIZE_BY_WIDTH);
-        expectedFeatures.add(ProcessorFeature.SIZE_BY_WIDTH_HEIGHT);
+        instance.setSourceFormat(getAnySupportedSourceFormat(instance));
+
+        Set<ProcessorFeature> expectedFeatures = new HashSet<>(Arrays.asList(
+                ProcessorFeature.MIRRORING,
+                ProcessorFeature.REGION_BY_PERCENT,
+                ProcessorFeature.REGION_BY_PIXELS,
+                ProcessorFeature.REGION_SQUARE,
+                ProcessorFeature.ROTATION_ARBITRARY,
+                ProcessorFeature.ROTATION_BY_90S,
+                ProcessorFeature.SIZE_ABOVE_FULL,
+                ProcessorFeature.SIZE_BY_DISTORTED_WIDTH_HEIGHT,
+                ProcessorFeature.SIZE_BY_FORCED_WIDTH_HEIGHT,
+                ProcessorFeature.SIZE_BY_HEIGHT,
+                ProcessorFeature.SIZE_BY_PERCENT,
+                ProcessorFeature.SIZE_BY_WIDTH,
+                ProcessorFeature.SIZE_BY_WIDTH_HEIGHT));
         assertEquals(expectedFeatures, instance.getSupportedFeatures());
     }
 
@@ -70,7 +84,7 @@ public class PdfBoxProcessorTest extends ProcessorTest {
 
         // page option missing
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-        OperationList ops = TestUtil.newOperationList();
+        OperationList ops = new OperationList(new Encode(Format.JPG));
         instance.process(ops, imageInfo, outputStream);
         final byte[] page1 = outputStream.toByteArray();
 
@@ -83,67 +97,86 @@ public class PdfBoxProcessorTest extends ProcessorTest {
         assertFalse(Arrays.equals(page1, page2));
     }
 
-    @Test
+    @Test(expected = ProcessorException.class)
     public void testProcessWithIllegalPageOptionThrowsException()
             throws Exception {
         instance.setSourceFile(TestUtil.getImage("pdf-multipage.pdf"));
         final Info imageInfo = instance.readImageInfo();
 
         // page "35"
-        OperationList ops = TestUtil.newOperationList();
+        OperationList ops = new OperationList(new Encode(Format.JPG));
         ops.getOptions().put("page", "35");
         OutputStream outputStream = new NullOutputStream();
-        try {
-            instance.process(ops, imageInfo, outputStream);
-            fail("Expected exception");
-        } catch (ProcessorException e) {
-            // pass
-        }
+
+        instance.process(ops, imageInfo, outputStream);
     }
 
     @Test
-    @Override
-    public void testReadImageInfo() throws Exception {
-        Info expectedInfo = new Info(100, 88, 100, 88, Format.PDF);
-        instance.setSourceFile(TestUtil.getImage("pdf.pdf"));
-        instance.setSourceFormat(Format.PDF);
-        assertEquals(expectedInfo, instance.readImageInfo());
+    public void testReadImageInfoWithMultiPagePDF() throws Exception {
+        instance.close();
+        instance.setSourceFile(TestUtil.getImage("pdf-multipage.pdf"));
+        final Info info = instance.readImageInfo();
+        assertEquals(2, info.getImages().size());
+        assertEquals(new Dimension(100, 88), info.getImages().get(0).getSize());
+        assertEquals(new Dimension(88, 100), info.getImages().get(1).getSize());
     }
 
     @Test
-    public void testValidate() throws Exception {
+    public void testValidateWithNoPageArgument() throws Exception {
         instance.setSourceFile(TestUtil.getImage("pdf.pdf"));
 
-        OperationList ops = TestUtil.newOperationList();
-        Dimension fullSize = new Dimension(1000, 1000);
+        OperationList ops = new OperationList(
+                new Identifier("cats"), new Encode(Format.JPG));
+        Dimension fullSize = new Dimension(100, 88);
         instance.validate(ops, fullSize);
+    }
 
+    @Test
+    public void testValidateWithValidPageArgument() throws Exception {
+        instance.setSourceFile(TestUtil.getImage("pdf.pdf"));
+
+        OperationList ops = new OperationList(
+                new Identifier("cats"), new Encode(Format.JPG));
         ops.getOptions().put("page", "1");
+        Dimension fullSize = new Dimension(100, 88);
+
         instance.validate(ops, fullSize);
+    }
 
-        ops.getOptions().put("page", "3");
-        try {
-            instance.validate(ops, fullSize);
-            fail("Expected exception");
-        } catch (ValidationException e) {
-            // pass
-        }
+    @Test(expected = IllegalArgumentException.class)
+    public void testValidateWithZeroPageArgument() throws Exception {
+        instance.setSourceFile(TestUtil.getImage("pdf.pdf"));
 
+        OperationList ops = new OperationList(
+                new Identifier("cats"), new Encode(Format.JPG));
         ops.getOptions().put("page", "0");
-        try {
-            instance.validate(ops, fullSize);
-            fail("Expected exception");
-        } catch (ValidationException e) {
-            // pass
-        }
+        Dimension fullSize = new Dimension(100, 88);
 
+        instance.validate(ops, fullSize);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testValidateWithNegativePageArgument() throws Exception {
+        instance.setSourceFile(TestUtil.getImage("pdf.pdf"));
+
+        OperationList ops = new OperationList(
+                new Identifier("cats"), new Encode(Format.JPG));
         ops.getOptions().put("page", "-1");
-        try {
-            instance.validate(ops, fullSize);
-            fail("Expected exception");
-        } catch (ValidationException e) {
-            // pass
-        }
+        Dimension fullSize = new Dimension(100, 88);
+
+        instance.validate(ops, fullSize);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testValidateWithExcessivePageArgument() throws Exception {
+        instance.setSourceFile(TestUtil.getImage("pdf.pdf"));
+
+        OperationList ops = new OperationList(
+                new Identifier("cats"), new Encode(Format.JPG));
+        ops.getOptions().put("page", "3");
+        Dimension fullSize = new Dimension(100, 88);
+
+        instance.validate(ops, fullSize);
     }
 
 }

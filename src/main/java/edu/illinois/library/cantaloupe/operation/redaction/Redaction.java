@@ -6,6 +6,7 @@ import edu.illinois.library.cantaloupe.operation.OperationList;
 
 import java.awt.Dimension;
 import java.awt.Rectangle;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -16,6 +17,7 @@ import java.util.Map;
  */
 public class Redaction implements Operation {
 
+    private boolean isFrozen = false;
     private Rectangle region;
 
     /**
@@ -25,6 +27,11 @@ public class Redaction implements Operation {
 
     public Redaction(Rectangle region) {
         this.setRegion(region);
+    }
+
+    @Override
+    public void freeze() {
+        isFrozen = true;
     }
 
     /**
@@ -76,11 +83,21 @@ public class Redaction implements Operation {
 
     /**
      * @param region Redacted region in source image pixel coordinates.
+     * @throws IllegalStateException If the instance is frozen.
      */
     public void setRegion(Rectangle region) {
+        if (isFrozen) {
+            throw new IllegalStateException("Instance is frozen.");
+        }
         this.region = region;
     }
 
+    /**
+     * @param fullSize Full size of the source image on which the operation
+     *                 is being applied.
+     * @return Map with <code>x</code>, <code>y</code>, <code>width</code>,
+     *         and <code>height</code> keys.
+     */
     @Override
     public Map<String, Object> toMap(Dimension fullSize) {
         final HashMap<String,Object> map = new HashMap<>();
@@ -89,7 +106,7 @@ public class Redaction implements Operation {
         map.put("y", getRegion().y);
         map.put("width", getRegion().width);
         map.put("height", getRegion().height);
-        return map;
+        return Collections.unmodifiableMap(map);
     }
 
     /**

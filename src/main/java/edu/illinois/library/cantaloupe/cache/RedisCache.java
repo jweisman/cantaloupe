@@ -22,6 +22,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
 
 /**
@@ -98,14 +99,16 @@ class RedisCache implements DerivativeCache {
         @Override
         public void close() throws IOException {
             try {
-                bufferStream.close();
+                if (bufferStream != null) {
+                    bufferStream.close();
+                }
             } finally {
                 super.close();
             }
         }
 
         @Override
-        public int read() throws IOException {
+        public int read() {
             if (bufferStream == null) {
                 bufferValue();
             }
@@ -121,11 +124,11 @@ class RedisCache implements DerivativeCache {
         }
 
         @Override
-        public int read(byte[] b, int off, int len) throws IOException {
+        public int read(byte[] b, int off, int len) {
             if (bufferStream == null) {
                 bufferValue();
             }
-            return super.read(b, off, len);
+            return bufferStream.read(b, off, len);
         }
 
     }
@@ -156,6 +159,11 @@ class RedisCache implements DerivativeCache {
             } finally {
                 super.close();
             }
+        }
+
+        @Override
+        public void flush() throws IOException {
+            bufferStream.flush();
         }
 
         @Override
@@ -196,7 +204,7 @@ class RedisCache implements DerivativeCache {
         }
     }
 
-    private static final Logger logger = LoggerFactory.
+    private static final Logger LOGGER = LoggerFactory.
             getLogger(RedisCache.class);
 
     static final String IMAGE_HASH_KEY =
@@ -217,23 +225,18 @@ class RedisCache implements DerivativeCache {
     }
 
     @Override
-    public Info getImageInfo(Identifier identifier) throws CacheException {
+    public Info getImageInfo(Identifier identifier) throws IOException {
         byte[] json = getConnection().sync().hget(INFO_HASH_KEY,
                 infoKey(identifier));
         if (json != null) {
-            try {
-                String jsonStr = new String(json, "UTF-8");
-                return Info.fromJson(jsonStr);
-            } catch (IOException e) {
-                throw new CacheException(e.getMessage(), e);
-            }
+            String jsonStr = new String(json, "UTF-8");
+            return Info.fromJSON(jsonStr);
         }
         return null;
     }
 
     @Override
-    public InputStream newDerivativeImageInputStream(OperationList opList)
-            throws CacheException {
+    public InputStream newDerivativeImageInputStream(OperationList opList) {
         final String imageKey = imageKey(opList);
         if (getConnection().sync().hexists(IMAGE_HASH_KEY, imageKey)) {
             return new RedisInputStream(IMAGE_HASH_KEY, imageKey,
@@ -243,8 +246,7 @@ class RedisCache implements DerivativeCache {
     }
 
     @Override
-    public OutputStream newDerivativeImageOutputStream(OperationList opList)
-            throws CacheException {
+    public OutputStream newDerivativeImageOutputStream(OperationList opList) {
         return new RedisOutputStream(IMAGE_HASH_KEY, imageKey(opList),
                 getConnection());
     }
@@ -252,11 +254,11 @@ class RedisCache implements DerivativeCache {
     @Override
     public void purge() {
         // Purge infos
-        logger.info("purge(): purging {}...", INFO_HASH_KEY);
+        LOGGER.info("purge(): purging {}...", INFO_HASH_KEY);
         getConnection().sync().del(INFO_HASH_KEY);
 
         // Purge images
-        logger.info("purge(): purging {}...", IMAGE_HASH_KEY);
+        LOGGER.info("purge(): purging {}...", IMAGE_HASH_KEY);
         getConnection().sync().del(IMAGE_HASH_KEY);
     }
 
@@ -264,13 +266,14 @@ class RedisCache implements DerivativeCache {
     public void purge(Identifier identifier) {
         // Purge info
         String infoKey = infoKey(identifier);
-        logger.info("purge(Identifier): purging {}...", infoKey);
+        LOGGER.info("purge(Identifier): purging {}...", infoKey);
         getConnection().sync().hdel(INFO_HASH_KEY, infoKey);
 
         // Purge images
         ScanArgs imagePattern = ScanArgs.Builder.matches(identifier + "*");
-        logger.info("purge(Identifier): purging {}...", imagePattern);
-        MapScanCursor cursor = getConnection().sync().
+        LOGGER.info("purge(Identifier): purging {}...", imagePattern);
+
+        MapScanCursor<String, byte[]> cursor = getConnection().sync().
                 hscan(IMAGE_HASH_KEY, imagePattern);
         for (Object key : cursor.getMap().keySet()) {
             getConnection().sync().hdel(IMAGE_HASH_KEY, (String) key);
@@ -281,28 +284,27 @@ class RedisCache implements DerivativeCache {
      * No-op.
      */
     @Override
-    public void purgeExpired() {
-        logger.info("purgeExpired(): " +
+    public void purgeInvalid() {
+        LOGGER.info("purgeInvalid(): " +
                 "nothing to do (expiration must be configured in Redis)");
     }
 
     @Override
     public void purge(OperationList opList) {
         String imageKey = imageKey(opList);
-        logger.info("purge(OperationList): purging {}...", imageKey);
+        LOGGER.info("purge(OperationList): purging {}...", imageKey);
         getConnection().sync().hdel(IMAGE_HASH_KEY, imageKey);
     }
 
     @Override
-    public void put(Identifier identifier, Info imageInfo)
-            throws CacheException {
-        logger.info("put(): caching info for {}", identifier);
+    public void put(Identifier identifier, Info imageInfo) throws IOException {
+        LOGGER.info("put(): caching info for {}", identifier);
         try {
             getConnection().async().hset(INFO_HASH_KEY, infoKey(identifier),
-                    imageInfo.toJson().getBytes());
-        } catch (JsonProcessingException e) {
-            logger.error("put(): {}", e.getMessage());
-            throw new CacheException(e.getMessage(), e);
+                    imageInfo.toJSON().getBytes("UTF-8"));
+        } catch (JsonProcessingException | UnsupportedEncodingException e) {
+            LOGGER.error("put(): {}", e.getMessage());
+            throw new IOException(e.getMessage(), e);
         }
     }
 

@@ -1,20 +1,27 @@
 package edu.illinois.library.cantaloupe.image;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import edu.illinois.library.cantaloupe.test.TestUtil;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-import java.io.File;
+import java.io.BufferedInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.StringWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 
 import static org.junit.Assert.*;
 
 public class MediaTypeTest {
 
-    private static final Map<Format, File> files = new HashMap<>();
+    private static final Map<Format, Path> files = new HashMap<>();
 
     private MediaType instance;
 
@@ -34,25 +41,68 @@ public class MediaTypeTest {
         instance = new MediaType("image/jpeg");
     }
 
-    /* detectMediaTypes(File) */
+    @Test
+    public void testSerialization() throws IOException {
+        MediaType type = new MediaType("image/jpeg");
+        try (StringWriter writer = new StringWriter()) {
+            new ObjectMapper().writeValue(writer, type);
+            assertEquals("\"image/jpeg\"", writer.toString());
+        }
+    }
 
     @Test
-    public void testDetectMediaTypes() {
+    public void testDeserialization() throws IOException {
+        MediaType type = new ObjectMapper().readValue("\"image/jpeg\"",
+                MediaType.class);
+        assertEquals("image/jpeg", type.toString());
+    }
+
+    /* detectMediaTypes(Path) */
+
+    @Test
+    public void testDetectMediaTypesWithPath() throws Exception {
         for (Format format : files.keySet()) {
-            File file = files.get(format);
+            Path file = files.get(format);
             MediaType preferredMediaType = format.getPreferredMediaType();
 
-            try {
-                boolean result = MediaType.detectMediaTypes(file).
+            boolean result = MediaType.detectMediaTypes(file).
+                    contains(preferredMediaType);
+            if (!result) {
+                System.err.println("detection failed:" +
+                        "\tformat: " + format +
+                        "\tfile: " + file.getFileName());
+            }
+
+            // detectMediaTypes() doesn't understand these.
+            if (!new HashSet<>(Arrays.asList("avi", "webm")).
+                    contains(file.getFileName().toString())) {
+                assertTrue(result);
+            }
+        }
+    }
+
+    /* detectMediaTypes(InputStream) */
+
+    @Test
+    public void testDetectMediaTypesWithInputStream() throws Exception {
+        for (Format format : files.keySet()) {
+            MediaType preferredMediaType = format.getPreferredMediaType();
+            Path file = files.get(format);
+
+            try (InputStream is = new BufferedInputStream(Files.newInputStream(file))) {
+                boolean result = MediaType.detectMediaTypes(is).
                         contains(preferredMediaType);
                 if (!result) {
-                    System.out.println("format: " + format +
-                            "\tfile: " + file.getName() +
-                            "\tresult: " + result);
+                    System.err.println("detection failed:" +
+                            "\tformat: " + format +
+                            "\tfile: " + file.getFileName());
                 }
-                //assertTrue(result);
-            } catch (IOException e) {
-                System.err.println(e.getMessage());
+
+                // detectMediaTypes() doesn't understand these.
+                if (!new HashSet<>(Arrays.asList("avi", "webm")).
+                        contains(file.getFileName().toString())) {
+                    assertTrue(result);
+                }
             }
         }
     }
@@ -65,22 +115,18 @@ public class MediaTypeTest {
         assertEquals("image/jpeg", instance.toString());
     }
 
-    @Test
+    @Test(expected = IllegalArgumentException.class)
     public void testConstructorWithInvalidString() {
-        try {
-            new MediaType("cats");
-            fail("Expected exception");
-        } catch (IllegalArgumentException e) {
-            // pass
-        }
+        new MediaType("cats");
     }
 
     /* equals() */
 
     @Test
     public void testEquals() {
-        assertTrue(instance.equals("image/jpeg"));
-        assertFalse(instance.equals("image/gif"));
+        assertTrue(instance.equals(new MediaType("image/jpeg")));
+        assertFalse(instance.equals(new MediaType("image/gif")));
+        assertFalse(instance.equals(null));
     }
 
     /* toFormat() */
@@ -98,7 +144,6 @@ public class MediaTypeTest {
         assertEquals(Format.MPG, new MediaType("video/mpeg").toFormat());
         assertEquals(Format.PDF, new MediaType("application/pdf").toFormat());
         assertEquals(Format.PNG, new MediaType("image/png").toFormat());
-        assertEquals(Format.SID, new MediaType("image/x-mrsid").toFormat());
         assertEquals(Format.TIF, new MediaType("image/tiff").toFormat());
         assertEquals(Format.WEBM, new MediaType("video/webm").toFormat());
         assertEquals(Format.WEBP, new MediaType("image/webp").toFormat());

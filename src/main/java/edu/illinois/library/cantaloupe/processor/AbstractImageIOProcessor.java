@@ -1,36 +1,38 @@
 package edu.illinois.library.cantaloupe.processor;
 
-import edu.illinois.library.cantaloupe.config.ConfigurationFactory;
+import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.image.Format;
 import edu.illinois.library.cantaloupe.image.Info;
-import edu.illinois.library.cantaloupe.operation.Orientation;
-import edu.illinois.library.cantaloupe.processor.imageio.ImageReader;
-import edu.illinois.library.cantaloupe.processor.imageio.ImageWriter;
-import edu.illinois.library.cantaloupe.resolver.StreamSource;
+import edu.illinois.library.cantaloupe.image.Orientation;
+import edu.illinois.library.cantaloupe.processor.codec.ImageReader;
+import edu.illinois.library.cantaloupe.processor.codec.ImageReaderFactory;
+import edu.illinois.library.cantaloupe.processor.codec.ImageWriterFactory;
+import edu.illinois.library.cantaloupe.source.StreamFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * Abstract class that can be extended by processors that rely on the ImageIO
- * framework to read images.
+ * Abstract class that can be extended by processors that read images using
+ * ImageIO.
  */
 abstract class AbstractImageIOProcessor extends AbstractProcessor {
 
-    private static Logger logger = LoggerFactory.
-            getLogger(AbstractImageIOProcessor.class);
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(AbstractImageIOProcessor.class);
 
-    private static final HashMap<Format,Set<Format>> FORMATS =
+    private static final Map<Format,Set<Format>> FORMATS =
             availableOutputFormats();
 
-    protected File sourceFile;
-    protected StreamSource streamSource;
+    protected Path sourceFile;
+    protected StreamFactory streamFactory;
 
     /**
      * Access via {@link #getReader()}.
@@ -38,55 +40,72 @@ abstract class AbstractImageIOProcessor extends AbstractProcessor {
     private ImageReader reader;
 
     /**
-     * @return Map of available output formats for all known source formats,
-     * based on information reported by ImageIO.
+     * @return Map of available output formats for all known source formats.
      */
     private static HashMap<Format, Set<Format>> availableOutputFormats() {
         final HashMap<Format,Set<Format>> map = new HashMap<>();
-        for (Format format : ImageReader.supportedFormats()) {
-            map.put(format, ImageWriter.supportedFormats());
+        for (Format format : ImageReaderFactory.supportedFormats()) {
+            map.put(format, ImageWriterFactory.supportedFormats());
         }
         return map;
     }
 
+    public void close() {
+        if (reader != null) {
+            reader.dispose();
+        }
+        reader = null;
+    }
+
     public Set<Format> getAvailableOutputFormats() {
-        Set<Format> formats = FORMATS.get(format);
+        Set<Format> formats = FORMATS.get(sourceFormat);
         if (formats == null) {
-            formats = new HashSet<>();
+            formats = Collections.unmodifiableSet(Collections.emptySet());
         }
         return formats;
     }
 
-    public Info readImageInfo() throws ProcessorException {
-        try {
-            final Info info = new Info();
-            info.setSourceFormat(getSourceFormat());
+    /**
+     * N.B.: Subclasses will need to override if they expect to {@link
+     * Info#setNumResolutions(int) set the number of resolutions} to a value
+     * other than {@literal 1}.
+     */
+    public Info readImageInfo() throws IOException {
+        final Info info = new Info();
+        info.getImages().clear();
+        info.setSourceFormat(sourceFormat);
 
-            final ImageReader reader = getReader();
-            final Orientation orientation = getEffectiveOrientation();
-            for (int i = 0, numResolutions = reader.getNumResolutions();
-                 i < numResolutions; i++) {
-                Info.Image image = new Info.Image();
-                image.setSize(reader.getSize(i));
-                image.setTileSize(reader.getTileSize(i));
-                image.setOrientation(orientation);
-                info.getImages().add(image);
+        final ImageReader reader = getReader();
+        final Orientation orientation = getEffectiveOrientation();
+        info.setNumResolutions(reader.getNumResolutions());
+
+        for (int i = 0, numImages = reader.getNumImages(); i < numImages; i++) {
+            Info.Image image = new Info.Image();
+            image.setOrientation(orientation);
+            image.setSize(reader.getSize(i));
+            image.setTileSize(reader.getTileSize(i));
+            // JP2 tile dimensions are inverted, so swap them
+            if ((image.width > image.height && image.tileWidth < image.tileHeight) ||
+                    (image.width < image.height && image.tileWidth > image.tileHeight)) {
+                int tmp = image.tileWidth;
+                image.tileWidth = image.tileHeight;
+                image.tileHeight = tmp;
             }
-            return info;
-        } catch (IOException e) {
-            throw new ProcessorException(e.getMessage(), e);
+            info.getImages().add(image);
         }
+        LOGGER.trace("readImageInfo(): {}", info.toJSON());
+        return info;
     }
 
     /**
      * @return Effective orientation of the image, respecting the setting of
      *         {@link Key#PROCESSOR_RESPECT_ORIENTATION}. Never null.
      */
-    protected Orientation getEffectiveOrientation() throws IOException {
+    Orientation getEffectiveOrientation() throws IOException {
         Orientation orientation = null;
-        if (ConfigurationFactory.getInstance().
+        if (Configuration.getInstance().
                 getBoolean(Key.PROCESSOR_RESPECT_ORIENTATION, false)) {
-            orientation = reader.getMetadata(0).getOrientation();
+            orientation = getReader().getMetadata(0).getOrientation();
         }
         if (orientation == null) {
             orientation = Orientation.ROTATE_0;
@@ -95,49 +114,40 @@ abstract class AbstractImageIOProcessor extends AbstractProcessor {
     }
 
     /**
-     * ({@link #setSourceFile(File)} or {@link #setStreamSource(StreamSource)})
-     * and {@link #setSourceFormat(Format)} must be invoked first.
+     * ({@link #setSourceFile} or {@link #setStreamFactory}) and
+     * {@link #setSourceFormat(Format)} must be invoked first.
      */
-    protected ImageReader getReader() {
+    protected ImageReader getReader() throws IOException {
         if (reader == null) {
-            try {
-                if (streamSource != null) {
-                    reader = new ImageReader(streamSource, getSourceFormat());
-                } else {
-                    reader = new ImageReader(sourceFile, getSourceFormat());
-                }
-            } catch (IOException e) {
-                logger.error(e.getMessage(), e);
+            ImageReaderFactory rf = new ImageReaderFactory();
+
+            if (streamFactory != null) {
+                reader = rf.newImageReader(streamFactory, sourceFormat);
+            } else {
+                reader = rf.newImageReader(sourceFile, sourceFormat);
             }
         }
         return reader;
     }
 
-    public File getSourceFile() {
-        return this.sourceFile;
+    public Path getSourceFile() {
+        return sourceFile;
     }
 
-    public StreamSource getStreamSource() {
-        return this.streamSource;
+    public StreamFactory getStreamFactory() {
+        return streamFactory;
     }
 
-    public void setSourceFile(File sourceFile) {
-        disposeReader();
-        this.streamSource = null;
+    public void setSourceFile(Path sourceFile) {
+        close();
+        this.streamFactory = null;
         this.sourceFile = sourceFile;
     }
 
-    public void setStreamSource(StreamSource streamSource) {
-        disposeReader();
+    public void setStreamFactory(StreamFactory streamFactory) {
+        close();
         this.sourceFile = null;
-        this.streamSource = streamSource;
-    }
-
-    private void disposeReader() {
-        if (reader != null) {
-            reader.dispose();
-        }
-        reader = null;
+        this.streamFactory = streamFactory;
     }
 
 }

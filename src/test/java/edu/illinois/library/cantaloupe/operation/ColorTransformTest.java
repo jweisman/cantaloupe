@@ -1,5 +1,7 @@
 package edu.illinois.library.cantaloupe.operation;
 
+import edu.illinois.library.cantaloupe.image.Format;
+import edu.illinois.library.cantaloupe.image.Identifier;
 import edu.illinois.library.cantaloupe.test.BaseTest;
 import org.junit.Test;
 
@@ -33,8 +35,8 @@ public class ColorTransformTest extends BaseTest {
     @Test
     public void testHasEffectWithArguments() {
         Dimension fullSize = new Dimension(600, 400);
-        OperationList opList = new OperationList();
-        opList.add(new Crop(0, 0, 300, 200));
+        OperationList opList = new OperationList(new Crop(0, 0, 300, 200));
+
         assertTrue(ColorTransform.BITONAL.hasEffect(fullSize, opList));
         assertTrue(ColorTransform.GRAY.hasEffect(fullSize, opList));
     }
@@ -44,6 +46,18 @@ public class ColorTransformTest extends BaseTest {
         Map<String,Object> map = ColorTransform.BITONAL.toMap(new Dimension(0, 0));
         assertEquals(ColorTransform.class.getSimpleName(), map.get("class"));
         assertEquals("bitonal", map.get("type"));
+    }
+
+    @Test
+    public void toMapReturnsUnmodifiableMap() {
+        Dimension fullSize = new Dimension(100, 100);
+        Map<String,Object> map = ColorTransform.GRAY.toMap(fullSize);
+        try {
+            map.put("test", "test");
+            fail("Expected exception");
+        } catch (UnsupportedOperationException e) {
+            // pass
+        }
     }
 
     @Test

@@ -2,7 +2,6 @@ package edu.illinois.library.cantaloupe.operation.overlay;
 
 import edu.illinois.library.cantaloupe.config.Configuration;
 import edu.illinois.library.cantaloupe.config.ConfigurationException;
-import edu.illinois.library.cantaloupe.config.ConfigurationFactory;
 import edu.illinois.library.cantaloupe.config.Key;
 import edu.illinois.library.cantaloupe.operation.Color;
 
@@ -32,7 +31,7 @@ class BasicStringOverlayService extends BasicOverlayService {
     }
 
     private void readConfig() throws ConfigurationException {
-        final Configuration config = ConfigurationFactory.getInstance();
+        final Configuration config = Configuration.getInstance();
 
         // Background color
         backgroundColor = Color.fromString(
@@ -44,7 +43,7 @@ class BasicStringOverlayService extends BasicOverlayService {
         // Font
         final Map<TextAttribute, Object> attributes = new HashMap<>();
         attributes.put(TextAttribute.FAMILY,
-                config.getString(Key.OVERLAY_STRING_FONT, "Helvetica"));
+                config.getString(Key.OVERLAY_STRING_FONT, "SansSerif"));
         attributes.put(TextAttribute.SIZE,
                 config.getInt(Key.OVERLAY_STRING_FONT_SIZE, 18));
         attributes.put(TextAttribute.WEIGHT,

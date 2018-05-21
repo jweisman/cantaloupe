@@ -12,6 +12,7 @@ import java.awt.font.TextAttribute;
 import java.nio.charset.Charset;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -23,7 +24,7 @@ import java.util.Map;
  */
 public class StringOverlay extends Overlay implements Operation {
 
-    private static final Logger logger = LoggerFactory.
+    private static final Logger LOGGER = LoggerFactory.
             getLogger(StringOverlay.class);
 
     private Color backgroundColor;
@@ -84,34 +85,66 @@ public class StringOverlay extends Overlay implements Operation {
         return (getString() != null && getString().length() > 0);
     }
 
+    /**
+     * @param color Background color to set.
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setBackgroundColor(Color color) {
+        checkFrozen();
         this.backgroundColor = color;
     }
 
+    /**
+     * @param color Color to set.
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setColor(Color color) {
+        checkFrozen();
         this.color = color;
     }
 
+    /**
+     * @param font Font to set.
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setFont(Font font) {
+        checkFrozen();
         this.font = font;
     }
 
+    /**
+     * @param minSize Minimum size in pixels
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setMinSize(int minSize) {
+        checkFrozen();
         this.minSize = minSize;
     }
 
+    /**
+     * @param string String to set.
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setString(String string) {
+        checkFrozen();
         this.string = string;
     }
 
+    /**
+     * @param color Color to set.
+     * @throws IllegalStateException If the instance is frozen.
+     */
     public void setStrokeColor(Color color) {
+        checkFrozen();
         this.strokeColor = color;
     }
 
     /**
      * @param width Width in pixels.
+     * @throws IllegalStateException If the instance is frozen.
      */
     public void setStrokeWidth(float width) {
+        checkFrozen();
         this.strokeWidth = width;
     }
 
@@ -130,7 +163,7 @@ public class StringOverlay extends Overlay implements Operation {
         map.put("background_color", getBackgroundColor().toRGBAHex());
         map.put("class", getClass().getSimpleName());
         map.put("color", getColor().toRGBAHex());
-        map.put("font", getFont().getFamily());
+        map.put("font", getFont().getName());
         map.put("font_size", getFont().getSize());
         map.put("font_weight",
                 getFont().getAttributes().get(TextAttribute.WEIGHT));
@@ -141,7 +174,7 @@ public class StringOverlay extends Overlay implements Operation {
         map.put("string", getString());
         map.put("stroke_color", getStrokeColor().toRGBAHex());
         map.put("stroke_width", getStrokeWidth());
-        return map;
+        return Collections.unmodifiableMap(map);
     }
 
     /**
@@ -157,7 +190,7 @@ public class StringOverlay extends Overlay implements Operation {
             digest.update(getString().getBytes(Charset.forName("UTF8")));
             string = Hex.encodeHexString(digest.digest());
         } catch (NoSuchAlgorithmException e) {
-            logger.error("toString(): {}", e.getMessage());
+            LOGGER.error("toString(): {}", e.getMessage());
             string = getString().replaceAll("[^A-Za-z0-9]", "");
         }
         // minSize is not included, as it is more of a potential property than
@@ -166,7 +199,7 @@ public class StringOverlay extends Overlay implements Operation {
                 string,
                 getPosition(),
                 getInset(),
-                getFont().getFamily(),
+                getFont().getName(),
                 getFont().getSize(),
                 getFont().getAttributes().get(TextAttribute.WEIGHT),
                 getFont().getAttributes().get(TextAttribute.TRACKING),
